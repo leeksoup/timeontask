@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app import TimeOnTask
+from timeontask import TimeOnTask
 
 
 class FakeCursor:

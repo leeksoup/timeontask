@@ -34,13 +34,13 @@ CREATE DATABASE timeontask;
 ## Usage
 
 ```bash
-python app.py add-project "Client Work"
-python app.py add-task 1 "Draft proposal"
-python app.py set-goal 1
-python app.py select-today 1
-python app.py complete 1
-python app.py end-of-day
-python app.py week-review
+python timeontask.py add-project "Client Work"
+python timeontask.py add-task 1 "Draft proposal"
+python timeontask.py set-goal 1
+python timeontask.py select-today 1
+python timeontask.py complete 1
+python timeontask.py end-of-day
+python timeontask.py week-review
 ```
 
 ## Tests
