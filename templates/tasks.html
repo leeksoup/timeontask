@@ -38,11 +38,26 @@
   <button type="submit">Create Batch</button>
 </form>
 
-<ul>
-  {% for task in tasks %}
-    <li>#{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id) }}">Edit</a></li>
+{% if tasks %}
+  {% if sort == 'project' %}
+    {% for project_group in tasks|groupby('project_name') %}
+      <h3>{{ project_group.grouper }}</h3>
+      <ul>
+        {% for task in project_group.list %}
+          <li>#{{ task.id }} — {{ task.title }} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id) }}">Edit</a></li>
+        {% endfor %}
+      </ul>
+    {% endfor %}
   {% else %}
+    <ul>
+      {% for task in tasks %}
+        <li>#{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id) }}">Edit</a></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% else %}
+  <ul>
     <li>No tasks yet.</li>
-  {% endfor %}
-</ul>
+  </ul>
+{% endif %}
 {% endblock %}
