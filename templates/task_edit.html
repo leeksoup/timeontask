@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Edit Task #{{ task.id }}</h2>
+<form method="post">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <label>
+    Title
+    <input name="title" value="{{ task.title }}" required />
+  </label>
+
+  <label>
+    Project
+    <select name="project_id" required>
+      {% for project in projects %}
+        <option value="{{ project.id }}" {% if project.id == task.project_id %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    <input type="checkbox" name="is_completed" {% if task.is_completed %}checked{% endif %} />
+    Completed
+  </label>
+
+  <button type="submit">Save</button>
+  <a href="{{ url_for('tasks', sort=sort) }}">Cancel</a>
+</form>
+{% endblock %}
