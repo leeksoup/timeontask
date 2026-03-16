@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -179,3 +180,7 @@ def test_update_task_changes_project_title_and_status(tracker: TimeOnTask):
 
     task = tracker.get_task(1)
     assert task == {"id": 1, "project_id": 2, "title": "Updated", "is_completed": 1}
+
+
+def test_task_edit_template_exists():
+    assert Path("templates/task_edit.html").exists()
