@@ -186,6 +186,38 @@ class TimeOnTask:
         cur.close()
         return rows
 
+
+    def list_incomplete_tasks(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.is_completed = 0
+            ORDER BY t.id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def list_week_goals(self, day: date | None = None) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT wg.id, wg.week_start, t.id AS task_id, t.title, t.is_completed, p.name AS project_name
+            FROM weekly_goals wg
+            JOIN tasks t ON t.id = wg.task_id
+            JOIN projects p ON p.id = t.project_id
+            WHERE wg.week_start = %s
+            ORDER BY wg.id
+            """,
+            (self.week_start(day),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
     def list_tasks(self) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)
         cur.execute("SELECT id, title, project_id, is_completed FROM tasks ORDER BY id")

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Today</h2>
+<p>Pick tasks for today. You can only have 2 active tasks at a time.</p>
+<form method="post">
+  <select name="task_id" required>
+    <option value="">Choose incomplete task</option>
+    {% for task in incomplete %}
+      <option value="{{ task.id }}">{{ task.project_name }} — {{ task.title }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Select for Today</button>
+</form>
+<ul>
+  {% for row in today_rows %}
+    <li>
+      {{ row.project_name }} — {{ row.title }}
+      {% if row.is_completed %}
+        ✅
+      {% else %}
+        <form class="inline" method="post" action="{{ url_for('complete_task', task_id=row.id) }}">
+          <button type="submit">Mark Complete</button>
+        </form>
+      {% endif %}
+    </li>
+  {% else %}
+    <li>No selections today.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

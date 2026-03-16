@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Tasks</h2>
+<form method="post">
+  <input name="title" placeholder="Task title" required />
+  <select name="project_id" required>
+    <option value="">Choose project</option>
+    {% for project in projects %}
+      <option value="{{ project.id }}">{{ project.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Add Task</button>
+</form>
+<ul>
+  {% for task in tasks %}
+    <li>#{{ task.id }} (project {{ task.project_id }}) — {{ task.title }} {% if task.is_completed %}✅{% else %}⏳{% endif %}</li>
+  {% else %}
+    <li>No tasks yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

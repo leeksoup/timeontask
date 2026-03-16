@@ -1,6 +1,6 @@
-# Time on Task (Python CLI with MariaDB/MySQL)
+# Time on Task (Python + MariaDB/MySQL)
 
-A task tracking app in Python that enforces your workflow:
+A task tracking app that enforces your workflow:
 
 - Every task belongs to a project.
 - Weekly goals are selected from project tasks.
@@ -11,10 +11,10 @@ A task tracking app in Python that enforces your workflow:
 
 ## Setup
 
-1. Install dependency:
+1. Install dependencies:
 
 ```bash
-pip install mysql-connector-python
+pip install mysql-connector-python Flask
 ```
 
 2. Create a database (example):
@@ -23,7 +23,7 @@ pip install mysql-connector-python
 CREATE DATABASE timeontask;
 ```
 
-3. Configure connection with environment variables (defaults shown):
+3. Configure connection environment variables (defaults shown):
 
 - `MYSQL_HOST` (default: `127.0.0.1`)
 - `MYSQL_PORT` (default: `3306`)
@@ -31,7 +31,15 @@ CREATE DATABASE timeontask;
 - `MYSQL_PASSWORD` (default: empty)
 - `MYSQL_DATABASE` (default: `timeontask`)
 
-## Usage
+## Run the web app (recommended)
+
+```bash
+python webapp.py
+```
+
+Open: http://localhost:5000
+
+## CLI usage
 
 ```bash
 python timeontask.py add-project "Client Work"
@@ -46,5 +54,5 @@ python timeontask.py week-review
 ## Tests
 
 ```bash
-pytest
+pytest -q
 ```
