@@ -55,6 +55,13 @@ class FakeCursor:
                 if task["id"] == params[0]:
                     task["is_completed"] = 1
             return
+        if q.startswith("update tasks set project_id"):
+            for task in self.db["tasks"]:
+                if task["id"] == params[3]:
+                    task["project_id"] = params[0]
+                    task["title"] = params[1]
+                    task["is_completed"] = params[2]
+            return
         if "from daily_selection ds join tasks" in q and "where ds.day_date" in q:
             today = params[0]
             out = []
@@ -80,6 +87,14 @@ class FakeCursor:
                     task = next(t for t in self.db["tasks"] if t["id"] == wg["task_id"])
                     out.append({"is_completed": task["is_completed"]})
             self.results = out
+            return
+        if q.startswith("select id, title, project_id, is_completed from tasks where id"):
+            task_id = params[0]
+            task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
+            self.results = [task] if task else []
+            return
+        if q.startswith("select id, title, project_id, is_completed from tasks order by id"):
+            self.results = sorted(self.db["tasks"], key=lambda t: t["id"])
             return
         raise AssertionError(f"Unhandled query: {query}")
 
@@ -143,3 +158,24 @@ def test_today_limit_and_completion_unlocks_new_task(tracker: TimeOnTask):
     progress = tracker.end_of_day(d)
     assert progress.total == 3
     assert progress.completed == 1
+
+
+def test_add_task_batch_creates_numbered_tasks(tracker: TimeOnTask):
+    tracker.add_project("Recordings")
+
+    created = tracker.add_task_batch(1, "Record item", 3)
+
+    assert created == 3
+    tasks = tracker.list_tasks()
+    assert [task["title"] for task in tasks] == ["Record item 1", "Record item 2", "Record item 3"]
+
+
+def test_update_task_changes_project_title_and_status(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_project("Project B")
+    tracker.add_task(1, "Original")
+
+    tracker.update_task(1, 2, "Updated", True)
+
+    task = tracker.get_task(1)
+    assert task == {"id": 1, "project_id": 2, "title": "Updated", "is_completed": 1}

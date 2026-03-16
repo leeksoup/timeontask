@@ -100,6 +100,25 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
+    def add_task_batch(self, project_id: int, base_title: str, count: int) -> int:
+        clean_title = base_title.strip()
+        if not clean_title:
+            raise ValueError("Base title is required.")
+        if count < 1:
+            raise ValueError("Count must be at least 1.")
+
+        cur = self.conn.cursor()
+        try:
+            for idx in range(1, count + 1):
+                cur.execute(
+                    "INSERT INTO tasks (project_id, title, is_completed) VALUES (%s, %s, 0)",
+                    (project_id, f"{clean_title} {idx}"),
+                )
+        finally:
+            cur.close()
+        self.conn.commit()
+        return count
+
     def set_week_goal(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()
         cur.execute(
@@ -218,6 +237,26 @@ class TimeOnTask:
         rows = cur.fetchall()
         cur.close()
         return rows
+
+    def get_task(self, task_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, title, project_id, is_completed FROM tasks WHERE id = %s",
+            (task_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def update_task(self, task_id: int, project_id: int, title: str, is_completed: bool) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE tasks SET project_id = %s, title = %s, is_completed = %s WHERE id = %s",
+            (project_id, title.strip(), int(is_completed), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
     def list_tasks(self) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)
         cur.execute("SELECT id, title, project_id, is_completed FROM tasks ORDER BY id")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, redirect, render_template, request, session, url_for
 
 from timeontask import TimeOnTask
 
@@ -63,15 +63,87 @@ def tasks() -> str:
             title = request.form.get("title", "").strip()
             project_id = request.form.get("project_id", "").strip()
             if title and project_id:
-                tracker.add_task(int(project_id), title)
+                project_id_int = int(project_id)
+                tracker.add_task(project_id_int, title)
+                session["last_project_id"] = project_id_int
                 flash("Task created.")
             else:
                 flash("Task title and project are required.")
             return redirect(url_for("tasks"))
 
+        projects = tracker.list_projects()
+        last_project_id = session.get("last_project_id")
+        valid_ids = {p["id"] for p in projects}
+        if last_project_id not in valid_ids:
+            last_project_id = projects[0]["id"] if projects else None
+
         return render_template(
             "tasks.html",
             tasks=tracker.list_tasks(),
+            projects=projects,
+            last_project_id=last_project_id,
+        )
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/bulk")
+def bulk_add_tasks() -> str:
+    tracker = TimeOnTask()
+    try:
+        base_title = request.form.get("base_title", "").strip()
+        project_id = request.form.get("project_id", "").strip()
+        count = request.form.get("count", "").strip()
+
+        if not base_title or not project_id or not count:
+            flash("Project, base title, and count are required.")
+            return redirect(url_for("tasks"))
+
+        try:
+            project_id_int = int(project_id)
+            count_int = int(count)
+        except ValueError:
+            flash("Count and project must be valid numbers.")
+            return redirect(url_for("tasks"))
+
+        if count_int < 1:
+            flash("Count must be at least 1.")
+            return redirect(url_for("tasks"))
+
+        created = tracker.add_task_batch(project_id_int, base_title, count_int)
+        session["last_project_id"] = project_id_int
+        flash(f"Created {created} tasks.")
+        return redirect(url_for("tasks"))
+    finally:
+        tracker.close()
+
+
+@app.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"])
+def edit_task(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        task = tracker.get_task(task_id)
+        if task is None:
+            flash("Task not found.")
+            return redirect(url_for("tasks"))
+
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            project_id = request.form.get("project_id", "").strip()
+            is_completed = request.form.get("is_completed") == "on"
+
+            if title and project_id:
+                project_id_int = int(project_id)
+                tracker.update_task(task_id, project_id_int, title, is_completed)
+                session["last_project_id"] = project_id_int
+                flash("Task updated.")
+                return redirect(url_for("tasks"))
+
+            flash("Task title and project are required.")
+
+        return render_template(
+            "task_edit.html",
+            task=task,
             projects=tracker.list_projects(),
         )
     finally:
