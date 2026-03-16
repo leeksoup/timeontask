@@ -61,6 +61,7 @@ Open: http://localhost:5000
 ### Tasks UI highlights
 
 - Create one task at a time with a project selector that defaults to your last-used project.
+- Sort the task list by created order or by project.
 - Edit existing tasks from the Tasks page (title, project, and completion status).
 - Bulk create numbered tasks from a base title (example: `Record item` + `12` creates `Record item 1..12`).
 

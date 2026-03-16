@@ -94,8 +94,25 @@ class FakeCursor:
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
             return
-        if q.startswith("select id, title, project_id, is_completed from tasks order by id"):
-            self.results = sorted(self.db["tasks"], key=lambda t: t["id"])
+        if "from tasks t join projects p on p.id = t.project_id" in q:
+            out = []
+            for task in self.db["tasks"]:
+                proj = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                out.append(
+                    {
+                        "id": task["id"],
+                        "title": task["title"],
+                        "project_id": task["project_id"],
+                        "is_completed": task["is_completed"],
+                        "project_name": proj["name"],
+                    }
+                )
+
+            if "order by p.name, t.title, t.id" in q:
+                out.sort(key=lambda t: (t["project_name"], t["title"], t["id"]))
+            else:
+                out.sort(key=lambda t: t["id"])
+            self.results = out
             return
         raise AssertionError(f"Unhandled query: {query}")
 
@@ -169,6 +186,19 @@ def test_add_task_batch_creates_numbered_tasks(tracker: TimeOnTask):
     assert created == 3
     tasks = tracker.list_tasks()
     assert [task["title"] for task in tasks] == ["Record item 1", "Record item 2", "Record item 3"]
+
+
+def test_list_tasks_can_sort_by_project(tracker: TimeOnTask):
+    tracker.add_project("Zeta")
+    tracker.add_project("Alpha")
+    tracker.add_task(1, "Task A")
+    tracker.add_task(2, "Task B")
+
+    tasks = tracker.list_tasks(sort_by="project")
+    assert [(task["project_name"], task["title"]) for task in tasks] == [
+        ("Alpha", "Task B"),
+        ("Zeta", "Task A"),
+    ]
 
 
 def test_update_task_changes_project_title_and_status(tracker: TimeOnTask):

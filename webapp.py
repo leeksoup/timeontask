@@ -59,6 +59,10 @@ def projects() -> str:
 def tasks() -> str:
     tracker = TimeOnTask()
     try:
+        sort = request.values.get("sort", "created")
+        if sort not in {"created", "project"}:
+            sort = "created"
+
         if request.method == "POST":
             title = request.form.get("title", "").strip()
             project_id = request.form.get("project_id", "").strip()
@@ -69,7 +73,7 @@ def tasks() -> str:
                 flash("Task created.")
             else:
                 flash("Task title and project are required.")
-            return redirect(url_for("tasks"))
+            return redirect(url_for("tasks", sort=sort))
 
         projects = tracker.list_projects()
         last_project_id = session.get("last_project_id")
@@ -79,9 +83,10 @@ def tasks() -> str:
 
         return render_template(
             "tasks.html",
-            tasks=tracker.list_tasks(),
+            tasks=tracker.list_tasks(sort_by=sort),
             projects=projects,
             last_project_id=last_project_id,
+            sort=sort,
         )
     finally:
         tracker.close()
@@ -91,29 +96,33 @@ def tasks() -> str:
 def bulk_add_tasks() -> str:
     tracker = TimeOnTask()
     try:
+        sort = request.form.get("sort", "created")
+        if sort not in {"created", "project"}:
+            sort = "created"
+
         base_title = request.form.get("base_title", "").strip()
         project_id = request.form.get("project_id", "").strip()
         count = request.form.get("count", "").strip()
 
         if not base_title or not project_id or not count:
             flash("Project, base title, and count are required.")
-            return redirect(url_for("tasks"))
+            return redirect(url_for("tasks", sort=sort))
 
         try:
             project_id_int = int(project_id)
             count_int = int(count)
         except ValueError:
             flash("Count and project must be valid numbers.")
-            return redirect(url_for("tasks"))
+            return redirect(url_for("tasks", sort=sort))
 
         if count_int < 1:
             flash("Count must be at least 1.")
-            return redirect(url_for("tasks"))
+            return redirect(url_for("tasks", sort=sort))
 
         created = tracker.add_task_batch(project_id_int, base_title, count_int)
         session["last_project_id"] = project_id_int
         flash(f"Created {created} tasks.")
-        return redirect(url_for("tasks"))
+        return redirect(url_for("tasks", sort=sort))
     finally:
         tracker.close()
 

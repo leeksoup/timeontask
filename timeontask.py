@@ -257,9 +257,20 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, sort_by: str = "created") -> list[dict[str, Any]]:
+        order_clause = "t.id"
+        if sort_by == "project":
+            order_clause = "p.name, t.title, t.id"
+
         cur = self.conn.cursor(dictionary=True)
-        cur.execute("SELECT id, title, project_id, is_completed FROM tasks ORDER BY id")
+        cur.execute(
+            f"""
+            SELECT t.id, t.title, t.project_id, t.is_completed, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            ORDER BY {order_clause}
+            """
+        )
         rows = cur.fetchall()
         cur.close()
         return rows
