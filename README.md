@@ -9,6 +9,25 @@ A task tracking app that enforces your workflow:
 - End-of-day summary shows what is complete.
 - Week review shows progress on weekly goals.
 
+## Product semantics (Milestone 0 decisions)
+
+These baseline decisions keep implementation and testing consistent as we add more features.
+
+- **Planning remains parent-task based.**
+  - Weekly goals target parent tasks.
+  - Daily selection (and the max-two-active rule) counts parent tasks only.
+- **Priority scale** (for upcoming priority support):
+  - `1 = High`
+  - `2 = Medium`
+  - `3 = Low`
+- **Subtask completion policy (MVP):**
+  - Parent task completion stays **manual**.
+  - Completing all subtasks does **not** auto-complete the parent in MVP.
+- **Repeating-task defaults** (for upcoming recurrence support):
+  - `starts_on` defaults to today if omitted.
+  - Monthly recurrences can include multiple dates per month.
+  - Yearly recurrences can include multiple dates per year (lower-priority enhancement).
+
 ## Setup
 
 1. Install dependencies:
