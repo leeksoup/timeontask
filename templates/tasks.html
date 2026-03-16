@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Tasks</h2>
+<form method="get">
+  <label>
+    Sort tasks by
+    <select name="sort" onchange="this.form.submit()">
+      <option value="created" {% if sort == 'created' %}selected{% endif %}>Created order</option>
+      <option value="project" {% if sort == 'project' %}selected{% endif %}>Project</option>
+    </select>
+  </label>
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+
+<form method="post">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <input name="title" placeholder="Task title" required />
+  <select name="project_id" required>
+    <option value="">Choose project</option>
+    {% for project in projects %}
+      <option value="{{ project.id }}" {% if last_project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Add Task</button>
+</form>
+
+<h3>Bulk Create Tasks</h3>
+<form method="post" action="{{ url_for('bulk_add_tasks') }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <input name="base_title" placeholder="Base title (e.g., Record item)" required />
+  <input name="count" type="number" min="1" step="1" value="12" required />
+  <select name="project_id" required>
+    <option value="">Choose project</option>
+    {% for project in projects %}
+      <option value="{{ project.id }}" {% if last_project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Create Batch</button>
+</form>
+
+<ul>
+  {% for task in tasks %}
+    <li>#{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id) }}">Edit</a></li>
+  {% else %}
+    <li>No tasks yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
