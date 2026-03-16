@@ -59,9 +59,10 @@ def projects() -> str:
 def tasks() -> str:
     tracker = TimeOnTask()
     try:
-        sort = request.values.get("sort", "created")
+        sort = request.values.get("sort", session.get("tasks_sort", "created"))
         if sort not in {"created", "project"}:
             sort = "created"
+        session["tasks_sort"] = sort
 
         if request.method == "POST":
             title = request.form.get("title", "").strip()
@@ -131,10 +132,15 @@ def bulk_add_tasks() -> str:
 def edit_task(task_id: int) -> str:
     tracker = TimeOnTask()
     try:
+        sort = request.values.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+        session["tasks_sort"] = sort
+
         task = tracker.get_task(task_id)
         if task is None:
             flash("Task not found.")
-            return redirect(url_for("tasks"))
+            return redirect(url_for("tasks", sort=sort))
 
         if request.method == "POST":
             title = request.form.get("title", "").strip()
@@ -146,7 +152,7 @@ def edit_task(task_id: int) -> str:
                 tracker.update_task(task_id, project_id_int, title, is_completed)
                 session["last_project_id"] = project_id_int
                 flash("Task updated.")
-                return redirect(url_for("tasks"))
+                return redirect(url_for("tasks", sort=sort))
 
             flash("Task title and project are required.")
 
@@ -154,6 +160,7 @@ def edit_task(task_id: int) -> str:
             "task_edit.html",
             task=task,
             projects=tracker.list_projects(),
+            sort=sort,
         )
     finally:
         tracker.close()
