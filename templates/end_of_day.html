@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>End of Day</h2>
+<p>Completed today: {{ summary.completed }}/{{ summary.total }}</p>
+<ul>
+  {% for row in rows %}
+    <li>{{ row.project_name }} — {{ row.title }} {% if row.is_completed %}✅{% else %}❌{% endif %}</li>
+  {% else %}
+    <li>No tasks selected today.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

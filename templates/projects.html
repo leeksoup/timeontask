@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Projects</h2>
+<form method="post">
+  <input name="name" placeholder="Project name" required />
+  <button type="submit">Add Project</button>
+</form>
+<ul>
+  {% for project in projects %}
+    <li>{{ project.id }} — {{ project.name }}</li>
+  {% else %}
+    <li>No projects yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
