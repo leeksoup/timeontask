@@ -52,6 +52,8 @@ class TimeOnTask:
               title VARCHAR(255) NOT NULL,
               due_date DATE NULL,
               priority TINYINT NULL,
+              template_id INT NULL,
+              occurrence_date DATE NULL,
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
               FOREIGN KEY (project_id) REFERENCES projects(id)
             ) ENGINE=InnoDB
@@ -59,6 +61,68 @@ class TimeOnTask:
         )
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date DATE NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TINYINT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_templates (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              due_date DATE NULL,
+              priority TINYINT NULL,
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_rules (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              template_id INT NOT NULL,
+              freq VARCHAR(16) NOT NULL,
+              interval_n INT NOT NULL DEFAULT 1,
+              starts_on DATE NOT NULL,
+              ends_on DATE NULL,
+              FOREIGN KEY (template_id) REFERENCES task_templates(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_weekdays (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              weekday TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_weekday (rule_id, weekday),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_month_days (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              day_of_month TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_month_day (rule_id, day_of_month),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_year_days (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              month_num TINYINT NOT NULL,
+              day_of_month TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_year_day (rule_id, month_num, day_of_month),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS weekly_goals (
@@ -120,6 +184,44 @@ class TimeOnTask:
         today = day or date.today()
         return (today - timedelta(days=today.weekday())).isoformat()
 
+    @staticmethod
+    def _parse_csv_ints(value: str | None, minimum: int, maximum: int) -> list[int]:
+        if not value:
+            return []
+        items: list[int] = []
+        for token in value.split(","):
+            clean = token.strip()
+            if not clean:
+                continue
+            try:
+                parsed = int(clean)
+            except ValueError as exc:
+                raise ValueError("Expected comma-separated numbers.") from exc
+            if parsed < minimum or parsed > maximum:
+                raise ValueError(f"Values must be between {minimum} and {maximum}.")
+            items.append(parsed)
+        return sorted(set(items))
+
+    @staticmethod
+    def _parse_year_dates(value: str | None) -> list[tuple[int, int]]:
+        if not value:
+            return []
+        out: list[tuple[int, int]] = []
+        for token in value.split(","):
+            clean = token.strip()
+            if not clean:
+                continue
+            try:
+                month_part, day_part = clean.split("-", 1)
+                month_num = int(month_part)
+                day_num = int(day_part)
+            except ValueError as exc:
+                raise ValueError("Yearly dates must be MM-DD, comma-separated.") from exc
+            if month_num < 1 or month_num > 12 or day_num < 1 or day_num > 31:
+                raise ValueError("Yearly MM-DD values are out of range.")
+            out.append((month_num, day_num))
+        return sorted(set(out))
+
     def add_project(self, name: str) -> None:
         cur = self.conn.cursor()
         cur.execute("INSERT INTO projects (name) VALUES (%s)", (name.strip(),))
@@ -171,6 +273,198 @@ class TimeOnTask:
             cur.close()
         self.conn.commit()
         return count
+
+    def add_recurring_template(
+        self,
+        project_id: int,
+        title: str,
+        freq: str,
+        interval_n: int = 1,
+        starts_on: str | None = None,
+        ends_on: str | None = None,
+        weekdays_csv: str | None = None,
+        month_days_csv: str | None = None,
+        year_dates_csv: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
+        freq_clean = freq.strip().upper()
+        if freq_clean not in {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}:
+            raise ValueError("Frequency must be daily, weekly, monthly, or yearly.")
+        if interval_n < 1:
+            raise ValueError("Interval must be at least 1.")
+
+        starts_on_iso = self._normalize_due_date(starts_on) or date.today().isoformat()
+        ends_on_iso = self._normalize_due_date(ends_on)
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+        weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
+        month_days = self._parse_csv_ints(month_days_csv, 1, 31)
+        year_dates = self._parse_year_dates(year_dates_csv)
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO task_templates (project_id, title, due_date, priority, is_active) VALUES (%s, %s, %s, %s, 1)",
+                (project_id, title.strip(), due_date_iso, priority_val),
+            )
+            template_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO task_recurrence_rules (template_id, freq, interval_n, starts_on, ends_on) VALUES (%s, %s, %s, %s, %s)",
+                (template_id, freq_clean, interval_n, starts_on_iso, ends_on_iso),
+            )
+            rule_id = cur.lastrowid
+
+            for weekday in weekdays:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_weekdays (rule_id, weekday) VALUES (%s, %s)",
+                    (rule_id, weekday),
+                )
+            for day_of_month in month_days:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_month_days (rule_id, day_of_month) VALUES (%s, %s)",
+                    (rule_id, day_of_month),
+                )
+            for month_num, day_of_month in year_dates:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_year_days (rule_id, month_num, day_of_month) VALUES (%s, %s, %s)",
+                    (rule_id, month_num, day_of_month),
+                )
+        finally:
+            cur.close()
+
+        self.conn.commit()
+        return template_id
+
+    def _rule_matches_date(
+        self,
+        rule: dict[str, Any],
+        target_date: date,
+        weekdays: list[int],
+        month_days: list[int],
+        year_dates: list[tuple[int, int]],
+    ) -> bool:
+        starts_on = date.fromisoformat(str(rule["starts_on"]))
+        if target_date < starts_on:
+            return False
+
+        ends_on_raw = rule.get("ends_on")
+        if ends_on_raw:
+            ends_on = date.fromisoformat(str(ends_on_raw))
+            if target_date > ends_on:
+                return False
+
+        interval_n = int(rule.get("interval_n") or 1)
+        freq = str(rule["freq"]).upper()
+        if freq == "DAILY":
+            return (target_date - starts_on).days % interval_n == 0
+
+        if freq == "WEEKLY":
+            week_delta = (target_date - starts_on).days // 7
+            if week_delta < 0 or week_delta % interval_n != 0:
+                return False
+            active_weekdays = weekdays or [starts_on.weekday()]
+            return target_date.weekday() in active_weekdays
+
+        if freq == "MONTHLY":
+            months_delta = (target_date.year - starts_on.year) * 12 + (target_date.month - starts_on.month)
+            if months_delta < 0 or months_delta % interval_n != 0:
+                return False
+            active_days = month_days or [starts_on.day]
+            return target_date.day in active_days
+
+        if freq == "YEARLY":
+            years_delta = target_date.year - starts_on.year
+            if years_delta < 0 or years_delta % interval_n != 0:
+                return False
+            active_dates = year_dates or [(starts_on.month, starts_on.day)]
+            return (target_date.month, target_date.day) in active_dates
+
+        return False
+
+    def generate_recurring_tasks(self, day: date | None = None, horizon_days: int = 0) -> int:
+        start_day = day or date.today()
+        end_day = start_day + timedelta(days=max(0, horizon_days))
+
+        created = 0
+        cur = self.conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT r.id, r.template_id, r.freq, r.interval_n, r.starts_on, r.ends_on,
+                       t.project_id, t.title, t.due_date, t.priority
+                FROM task_recurrence_rules r
+                JOIN task_templates t ON t.id = r.template_id
+                WHERE t.is_active = 1
+                ORDER BY r.id
+                """
+            )
+            rules = cur.fetchall()
+
+            for rule in rules:
+                cur.execute("SELECT weekday FROM task_recurrence_weekdays WHERE rule_id = %s", (rule["id"],))
+                weekdays = [row["weekday"] for row in cur.fetchall()]
+
+                cur.execute(
+                    "SELECT day_of_month FROM task_recurrence_month_days WHERE rule_id = %s",
+                    (rule["id"],),
+                )
+                month_days = [row["day_of_month"] for row in cur.fetchall()]
+
+                cur.execute(
+                    "SELECT month_num, day_of_month FROM task_recurrence_year_days WHERE rule_id = %s",
+                    (rule["id"],),
+                )
+                year_dates = [(row["month_num"], row["day_of_month"]) for row in cur.fetchall()]
+
+                current = start_day
+                while current <= end_day:
+                    if self._rule_matches_date(rule, current, weekdays, month_days, year_dates):
+                        occurrence = current.isoformat()
+                        cur.execute(
+                            "SELECT id FROM tasks WHERE template_id = %s AND occurrence_date = %s",
+                            (rule["template_id"], occurrence),
+                        )
+                        exists = cur.fetchone()
+                        if not exists:
+                            cur.execute(
+                                """
+                                INSERT INTO tasks
+                                  (project_id, title, due_date, priority, template_id, occurrence_date, is_completed)
+                                VALUES (%s, %s, %s, %s, %s, %s, 0)
+                                """,
+                                (
+                                    rule["project_id"],
+                                    rule["title"],
+                                    rule.get("due_date"),
+                                    rule.get("priority"),
+                                    rule["template_id"],
+                                    occurrence,
+                                ),
+                            )
+                            created += 1
+                    current += timedelta(days=1)
+        finally:
+            cur.close()
+
+        self.conn.commit()
+        return created
+
+    def list_recurring_templates(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, p.name AS project_name, r.freq, r.interval_n, r.starts_on, r.ends_on
+            FROM task_templates t
+            JOIN task_recurrence_rules r ON r.template_id = t.id
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.is_active = 1
+            ORDER BY t.id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
 
     def set_week_goal(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()

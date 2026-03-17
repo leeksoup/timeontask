@@ -52,6 +52,47 @@
   <button type="submit">Create Batch</button>
 </form>
 
+<h3>Recurring Task Templates</h3>
+<form method="post" action="{{ url_for('add_recurring_task_template') }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <input name="title" placeholder="Template title" required />
+  <select name="project_id" required>
+    <option value="">Choose project</option>
+    {% for project in projects %}
+      <option value="{{ project.id }}" {% if last_project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="freq" required>
+    <option value="">Frequency</option>
+    <option value="DAILY">Daily</option>
+    <option value="WEEKLY">Weekly</option>
+    <option value="MONTHLY">Monthly</option>
+    <option value="YEARLY">Yearly</option>
+  </select>
+  <input name="interval_n" type="number" min="1" step="1" value="1" required />
+  <input name="starts_on" type="date" />
+  <input name="ends_on" type="date" />
+  <input name="weekdays" placeholder="Weekdays CSV 0-6" />
+  <input name="month_days" placeholder="Month days CSV 1-31" />
+  <input name="year_dates" placeholder="Year dates CSV MM-DD" />
+  <input name="due_date" type="date" />
+  <select name="priority">
+    <option value="">No priority</option>
+    <option value="1">High (1)</option>
+    <option value="2">Medium (2)</option>
+    <option value="3">Low (3)</option>
+  </select>
+  <button type="submit">Add Recurring Template</button>
+</form>
+
+<ul>
+  {% for tpl in recurring_templates %}
+    <li>#{{ tpl.id }} {{ tpl.project_name }} — {{ tpl.title }} ({{ tpl.freq }} every {{ tpl.interval_n }}, starts {{ tpl.starts_on }})</li>
+  {% else %}
+    <li>No recurring templates yet.</li>
+  {% endfor %}
+</ul>
+
 {% if tasks %}
   {% if sort == 'project' %}
     {% for project_group in tasks|groupby('project_name') %}

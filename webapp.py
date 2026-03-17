@@ -63,6 +63,7 @@ def tasks() -> str:
         if sort not in {"created", "project"}:
             sort = "created"
         session["tasks_sort"] = sort
+        tracker.generate_recurring_tasks()
 
         if request.method == "POST":
             title = request.form.get("title", "").strip()
@@ -92,6 +93,7 @@ def tasks() -> str:
             tasks=tracker.list_tasks(sort_by=sort),
             projects=projects,
             last_project_id=last_project_id,
+            recurring_templates=tracker.list_recurring_templates(),
             sort=sort,
         )
     finally:
@@ -139,6 +141,61 @@ def bulk_add_tasks() -> str:
             flash(f"Created {created} tasks.")
         except ValueError as exc:
             flash(str(exc))
+        return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/recurring")
+def add_recurring_task_template() -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+
+        title = request.form.get("title", "").strip()
+        project_id = request.form.get("project_id", "").strip()
+        freq = request.form.get("freq", "").strip()
+        interval_n = request.form.get("interval_n", "1").strip()
+        starts_on = request.form.get("starts_on", "")
+        ends_on = request.form.get("ends_on", "")
+        weekdays = request.form.get("weekdays", "")
+        month_days = request.form.get("month_days", "")
+        year_dates = request.form.get("year_dates", "")
+        due_date = request.form.get("due_date", "")
+        priority = request.form.get("priority", "")
+
+        if not title or not project_id or not freq:
+            flash("Recurring template needs title, project, and frequency.")
+            return redirect(url_for("tasks", sort=sort))
+
+        try:
+            project_id_int = int(project_id)
+            interval_n_int = int(interval_n)
+        except ValueError:
+            flash("Project and interval must be valid numbers.")
+            return redirect(url_for("tasks", sort=sort))
+
+        try:
+            tracker.add_recurring_template(
+                project_id_int,
+                title,
+                freq=freq,
+                interval_n=interval_n_int,
+                starts_on=starts_on,
+                ends_on=ends_on,
+                weekdays_csv=weekdays,
+                month_days_csv=month_days,
+                year_dates_csv=year_dates,
+                due_date=due_date,
+                priority=priority,
+            )
+            tracker.generate_recurring_tasks()
+            flash("Recurring template created.")
+        except ValueError as exc:
+            flash(str(exc))
+
         return redirect(url_for("tasks", sort=sort))
     finally:
         tracker.close()
@@ -219,6 +276,7 @@ def weekly_goals() -> str:
 def today() -> str:
     tracker = TimeOnTask()
     try:
+        tracker.generate_recurring_tasks()
         if request.method == "POST":
             task_id = request.form.get("task_id", "").strip()
             if task_id:

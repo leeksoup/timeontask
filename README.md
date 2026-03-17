@@ -65,6 +65,7 @@ Open: http://localhost:5000
 - Optionally set due date and priority when creating/editing tasks.
 - Edit existing tasks from the Tasks page (title, project, and completion status).
 - Bulk create numbered tasks from a base title (example: `Record item` + `12` creates `Record item 1..12`).
+- Define recurring task templates (daily/weekly/monthly/yearly) with optional weekday/month-day/year-date rules.
 
 ## CLI usage
 
