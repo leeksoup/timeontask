@@ -72,6 +72,7 @@ Open: http://localhost:5000
 - Edit existing tasks from the Tasks page (title, project, and completion status).
 - Bulk create numbered tasks from a base title (example: `Record item` + `12` creates `Record item 1..12`).
 - Define recurring task templates (daily/weekly/monthly/yearly) with optional weekday/month-day/year-date rules.
+- Manage subtasks from the task edit screen (add, mark done/open, delete) while weekly goals/today focus remain parent-task based.
 
 ## CLI usage
 

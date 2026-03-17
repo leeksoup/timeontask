@@ -65,6 +65,18 @@ class TimeOnTask:
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS subtasks (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              task_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              is_completed TINYINT(1) NOT NULL DEFAULT 0,
+              position INT NOT NULL,
+              FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS task_templates (
               id INT PRIMARY KEY AUTO_INCREMENT,
               project_id INT NOT NULL,
@@ -465,6 +477,43 @@ class TimeOnTask:
         rows = cur.fetchall()
         cur.close()
         return rows
+
+    def add_subtask(self, task_id: int, title: str) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Subtask title is required.")
+
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT COALESCE(MAX(position), 0) AS max_position FROM subtasks WHERE task_id = %s", (task_id,))
+        max_position = cur.fetchone()["max_position"]
+        cur.execute(
+            "INSERT INTO subtasks (task_id, title, is_completed, position) VALUES (%s, %s, 0, %s)",
+            (task_id, clean_title, int(max_position) + 1),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def list_subtasks(self, task_id: int) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, task_id, title, is_completed, position FROM subtasks WHERE task_id = %s ORDER BY position, id",
+            (task_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def set_subtask_completed(self, subtask_id: int, is_completed: bool) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE subtasks SET is_completed = %s WHERE id = %s", (int(is_completed), subtask_id))
+        cur.close()
+        self.conn.commit()
+
+    def delete_subtask(self, subtask_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM subtasks WHERE id = %s", (subtask_id,))
+        cur.close()
+        self.conn.commit()
 
     def set_week_goal(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()

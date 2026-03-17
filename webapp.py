@@ -209,6 +209,68 @@ def add_recurring_task_template() -> str:
         tracker.close()
 
 
+@app.post("/tasks/<int:task_id>/subtasks")
+def add_subtask(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+
+        title = request.form.get("title", "").strip()
+        if not title:
+            flash("Subtask title is required.")
+            return redirect(url_for("edit_task", task_id=task_id, sort=sort))
+
+        try:
+            tracker.add_subtask(task_id, title)
+            flash("Subtask added.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("edit_task", task_id=task_id, sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/subtasks/<int:subtask_id>/toggle")
+def toggle_subtask(subtask_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        task_id = request.form.get("task_id", "").strip()
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+
+        is_completed = request.form.get("is_completed") == "1"
+        tracker.set_subtask_completed(subtask_id, is_completed)
+        flash("Subtask updated.")
+
+        if task_id:
+            return redirect(url_for("edit_task", task_id=int(task_id), sort=sort))
+        return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/subtasks/<int:subtask_id>/delete")
+def delete_subtask(subtask_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        task_id = request.form.get("task_id", "").strip()
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+
+        tracker.delete_subtask(subtask_id)
+        flash("Subtask deleted.")
+
+        if task_id:
+            return redirect(url_for("edit_task", task_id=int(task_id), sort=sort))
+        return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
 @app.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"])
 def edit_task(task_id: int) -> str:
     tracker = TimeOnTask()
@@ -253,6 +315,7 @@ def edit_task(task_id: int) -> str:
             "task_edit.html",
             task=task,
             projects=tracker.list_projects(),
+            subtasks=tracker.list_subtasks(task_id),
             sort=sort,
         )
     finally:

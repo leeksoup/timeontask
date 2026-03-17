@@ -40,4 +40,37 @@
   <button type="submit">Save</button>
   <a href="{{ url_for('tasks', sort=sort) }}">Cancel</a>
 </form>
+
+<h3>Subtasks</h3>
+<form method="post" action="{{ url_for('add_subtask', task_id=task.id) }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <label>
+    New subtask
+    <input name="title" placeholder="Add subtask" required />
+  </label>
+  <button type="submit">Add subtask</button>
+</form>
+
+{% if subtasks %}
+<ul>
+  {% for subtask in subtasks %}
+  <li>
+    <form method="post" action="{{ url_for('toggle_subtask', subtask_id=subtask.id) }}" style="display:inline-block; margin-right: 0.5rem;">
+      <input type="hidden" name="task_id" value="{{ task.id }}" />
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <input type="hidden" name="is_completed" value="{{ 0 if subtask.is_completed else 1 }}" />
+      <button type="submit">{% if subtask.is_completed %}Mark open{% else %}Mark done{% endif %}</button>
+    </form>
+    {% if subtask.is_completed %}<s>{{ subtask.title }}</s>{% else %}{{ subtask.title }}{% endif %}
+    <form method="post" action="{{ url_for('delete_subtask', subtask_id=subtask.id) }}" style="display:inline-block; margin-left: 0.5rem;">
+      <input type="hidden" name="task_id" value="{{ task.id }}" />
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Delete</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No subtasks yet.</p>
+{% endif %}
 {% endblock %}

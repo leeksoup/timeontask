@@ -88,6 +88,22 @@ class FakeCursor:
             if row not in self.db["task_recurrence_year_days"]:
                 self.db["task_recurrence_year_days"].append(row)
             return
+        if q.startswith("select coalesce(max(position), 0) as max_position from subtasks where task_id"):
+            task_id = params[0]
+            positions = [s["position"] for s in self.db["subtasks"] if s["task_id"] == task_id]
+            self.results = [{"max_position": max(positions) if positions else 0}]
+            return
+        if q.startswith("insert into subtasks"):
+            self.db["subtasks"].append(
+                {
+                    "id": len(self.db["subtasks"]) + 1,
+                    "task_id": params[0],
+                    "title": params[1],
+                    "is_completed": 0,
+                    "position": params[2],
+                }
+            )
+            return
         if "select count(*) as open_count" in q:
             today = params[0]
             open_count = 0
@@ -116,6 +132,15 @@ class FakeCursor:
                     task["due_date"] = params[2]
                     task["priority"] = params[3]
                     task["is_completed"] = params[4]
+            return
+        if q.startswith("update subtasks set is_completed"):
+            for subtask in self.db["subtasks"]:
+                if subtask["id"] == params[1]:
+                    subtask["is_completed"] = params[0]
+            return
+        if q.startswith("delete from subtasks where id"):
+            subtask_id = params[0]
+            self.db["subtasks"] = [s for s in self.db["subtasks"] if s["id"] != subtask_id]
             return
         if "from daily_selection ds join tasks" in q and "where ds.day_date" in q:
             today = params[0]
@@ -212,6 +237,12 @@ class FakeCursor:
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
             return
+        if q.startswith("select id, task_id, title, is_completed, position from subtasks where task_id"):
+            task_id = params[0]
+            out = [s for s in self.db["subtasks"] if s["task_id"] == task_id]
+            out.sort(key=lambda s: (s["position"], s["id"]))
+            self.results = out
+            return
         if "from tasks t join projects p on p.id = t.project_id" in q:
             out = []
             for task in self.db["tasks"]:
@@ -258,6 +289,7 @@ class FakeConnection:
             "task_recurrence_weekdays": [],
             "task_recurrence_month_days": [],
             "task_recurrence_year_days": [],
+            "subtasks": [],
         }
 
     def cursor(self, dictionary=False):
@@ -397,3 +429,42 @@ def test_recurring_monthly_supports_multiple_days(tracker: TimeOnTask):
 
 def test_task_edit_template_exists():
     assert Path("templates/task_edit.html").exists()
+
+
+def test_subtasks_can_be_added_toggled_and_deleted(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+
+    tracker.add_subtask(1, "Child 1")
+    tracker.add_subtask(1, "Child 2")
+
+    subtasks = tracker.list_subtasks(1)
+    assert [s["title"] for s in subtasks] == ["Child 1", "Child 2"]
+    assert [s["position"] for s in subtasks] == [1, 2]
+
+    tracker.set_subtask_completed(subtasks[0]["id"], True)
+    subtasks = tracker.list_subtasks(1)
+    assert subtasks[0]["is_completed"] == 1
+
+    tracker.delete_subtask(subtasks[1]["id"])
+    subtasks = tracker.list_subtasks(1)
+    assert len(subtasks) == 1
+
+
+def test_subtasks_do_not_change_parent_task_planning_semantics(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+    tracker.set_week_goal(1, day=date(2026, 3, 9))
+    tracker.select_today_task(1, day=date(2026, 3, 10))
+
+    tracker.add_subtask(1, "Child")
+    child = tracker.list_subtasks(1)[0]
+    tracker.set_subtask_completed(child["id"], True)
+
+    review = tracker.week_review(day=date(2026, 3, 9))
+    today_progress = tracker.end_of_day(day=date(2026, 3, 10))
+
+    assert review.total == 1
+    assert review.completed == 0
+    assert today_progress.total == 1
+    assert today_progress.completed == 0
