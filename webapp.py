@@ -67,11 +67,16 @@ def tasks() -> str:
         if request.method == "POST":
             title = request.form.get("title", "").strip()
             project_id = request.form.get("project_id", "").strip()
+            due_date = request.form.get("due_date", "")
+            priority = request.form.get("priority", "")
             if title and project_id:
-                project_id_int = int(project_id)
-                tracker.add_task(project_id_int, title)
-                session["last_project_id"] = project_id_int
-                flash("Task created.")
+                try:
+                    project_id_int = int(project_id)
+                    tracker.add_task(project_id_int, title, due_date=due_date, priority=priority)
+                    session["last_project_id"] = project_id_int
+                    flash("Task created.")
+                except ValueError as exc:
+                    flash(str(exc))
             else:
                 flash("Task title and project are required.")
             return redirect(url_for("tasks", sort=sort))
@@ -104,6 +109,8 @@ def bulk_add_tasks() -> str:
         base_title = request.form.get("base_title", "").strip()
         project_id = request.form.get("project_id", "").strip()
         count = request.form.get("count", "").strip()
+        due_date = request.form.get("due_date", "")
+        priority = request.form.get("priority", "")
 
         if not base_title or not project_id or not count:
             flash("Project, base title, and count are required.")
@@ -120,9 +127,18 @@ def bulk_add_tasks() -> str:
             flash("Count must be at least 1.")
             return redirect(url_for("tasks", sort=sort))
 
-        created = tracker.add_task_batch(project_id_int, base_title, count_int)
-        session["last_project_id"] = project_id_int
-        flash(f"Created {created} tasks.")
+        try:
+            created = tracker.add_task_batch(
+                project_id_int,
+                base_title,
+                count_int,
+                due_date=due_date,
+                priority=priority,
+            )
+            session["last_project_id"] = project_id_int
+            flash(f"Created {created} tasks.")
+        except ValueError as exc:
+            flash(str(exc))
         return redirect(url_for("tasks", sort=sort))
     finally:
         tracker.close()
@@ -145,14 +161,26 @@ def edit_task(task_id: int) -> str:
         if request.method == "POST":
             title = request.form.get("title", "").strip()
             project_id = request.form.get("project_id", "").strip()
+            due_date = request.form.get("due_date", "")
+            priority = request.form.get("priority", "")
             is_completed = request.form.get("is_completed") == "on"
 
             if title and project_id:
-                project_id_int = int(project_id)
-                tracker.update_task(task_id, project_id_int, title, is_completed)
-                session["last_project_id"] = project_id_int
-                flash("Task updated.")
-                return redirect(url_for("tasks", sort=sort))
+                try:
+                    project_id_int = int(project_id)
+                    tracker.update_task(
+                        task_id,
+                        project_id_int,
+                        title,
+                        is_completed,
+                        due_date=due_date,
+                        priority=priority,
+                    )
+                    session["last_project_id"] = project_id_int
+                    flash("Task updated.")
+                    return redirect(url_for("tasks", sort=sort))
+                except ValueError as exc:
+                    flash(str(exc))
 
             flash("Task title and project are required.")
 

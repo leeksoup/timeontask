@@ -18,6 +18,8 @@ class FakeCursor:
 
         if q.startswith("create table"):
             return
+        if q.startswith("alter table tasks add column"):
+            return
         if q.startswith("insert into projects"):
             self.db["projects"].append({"id": len(self.db["projects"]) + 1, "name": params[0]})
             return
@@ -27,6 +29,8 @@ class FakeCursor:
                     "id": len(self.db["tasks"]) + 1,
                     "project_id": params[0],
                     "title": params[1],
+                    "due_date": params[2],
+                    "priority": params[3],
                     "is_completed": 0,
                 }
             )
@@ -58,10 +62,12 @@ class FakeCursor:
             return
         if q.startswith("update tasks set project_id"):
             for task in self.db["tasks"]:
-                if task["id"] == params[3]:
+                if task["id"] == params[5]:
                     task["project_id"] = params[0]
                     task["title"] = params[1]
-                    task["is_completed"] = params[2]
+                    task["due_date"] = params[2]
+                    task["priority"] = params[3]
+                    task["is_completed"] = params[4]
             return
         if "from daily_selection ds join tasks" in q and "where ds.day_date" in q:
             today = params[0]
@@ -74,6 +80,8 @@ class FakeCursor:
                         {
                             "id": task["id"],
                             "title": task["title"],
+                            "due_date": task["due_date"],
+                            "priority": task["priority"],
                             "is_completed": task["is_completed"],
                             "project_name": proj["name"],
                         }
@@ -89,7 +97,7 @@ class FakeCursor:
                     out.append({"is_completed": task["is_completed"]})
             self.results = out
             return
-        if q.startswith("select id, title, project_id, is_completed from tasks where id"):
+        if q.startswith("select id, title, project_id, due_date, priority, is_completed from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
@@ -103,6 +111,8 @@ class FakeCursor:
                         "id": task["id"],
                         "title": task["title"],
                         "project_id": task["project_id"],
+                        "due_date": task["due_date"],
+                        "priority": task["priority"],
                         "is_completed": task["is_completed"],
                         "project_name": proj["name"],
                     }
@@ -181,11 +191,13 @@ def test_today_limit_and_completion_unlocks_new_task(tracker: TimeOnTask):
 def test_add_task_batch_creates_numbered_tasks(tracker: TimeOnTask):
     tracker.add_project("Recordings")
 
-    created = tracker.add_task_batch(1, "Record item", 3)
+    created = tracker.add_task_batch(1, "Record item", 3, due_date="2026-03-31", priority=2)
 
     assert created == 3
     tasks = tracker.list_tasks()
     assert [task["title"] for task in tasks] == ["Record item 1", "Record item 2", "Record item 3"]
+    assert all(task["due_date"] == "2026-03-31" for task in tasks)
+    assert all(task["priority"] == 2 for task in tasks)
 
 
 def test_list_tasks_can_sort_by_project(tracker: TimeOnTask):
@@ -206,10 +218,27 @@ def test_update_task_changes_project_title_and_status(tracker: TimeOnTask):
     tracker.add_project("Project B")
     tracker.add_task(1, "Original")
 
-    tracker.update_task(1, 2, "Updated", True)
+    tracker.update_task(1, 2, "Updated", True, due_date="2026-04-01", priority=1)
 
     task = tracker.get_task(1)
-    assert task == {"id": 1, "project_id": 2, "title": "Updated", "is_completed": 1}
+    assert task == {
+        "id": 1,
+        "project_id": 2,
+        "title": "Updated",
+        "due_date": "2026-04-01",
+        "priority": 1,
+        "is_completed": 1,
+    }
+
+
+def test_add_task_validates_due_date_and_priority(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+
+    with pytest.raises(ValueError, match="Due date"):
+        tracker.add_task(1, "Bad date", due_date="2026/03/31")
+
+    with pytest.raises(ValueError, match="Priority"):
+        tracker.add_task(1, "Bad priority", priority=4)
 
 
 def test_task_edit_template_exists():

@@ -50,11 +50,15 @@ class TimeOnTask:
               id INT PRIMARY KEY AUTO_INCREMENT,
               project_id INT NOT NULL,
               title VARCHAR(255) NOT NULL,
+              due_date DATE NULL,
+              priority TINYINT NULL,
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
               FOREIGN KEY (project_id) REFERENCES projects(id)
             ) ENGINE=InnoDB
             """
         )
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TINYINT NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS weekly_goals (
@@ -81,6 +85,37 @@ class TimeOnTask:
         self.conn.commit()
 
     @staticmethod
+    def _normalize_due_date(due_date: str | None) -> str | None:
+        if due_date is None:
+            return None
+        clean = due_date.strip()
+        if not clean:
+            return None
+        try:
+            return date.fromisoformat(clean).isoformat()
+        except ValueError as exc:
+            raise ValueError("Due date must be YYYY-MM-DD.") from exc
+
+    @staticmethod
+    def _normalize_priority(priority: str | int | None) -> int | None:
+        if priority is None:
+            return None
+        if isinstance(priority, str):
+            clean = priority.strip()
+            if not clean:
+                return None
+            try:
+                parsed = int(clean)
+            except ValueError as exc:
+                raise ValueError("Priority must be 1, 2, or 3.") from exc
+        else:
+            parsed = int(priority)
+
+        if parsed not in {1, 2, 3}:
+            raise ValueError("Priority must be 1, 2, or 3.")
+        return parsed
+
+    @staticmethod
     def week_start(day: date | None = None) -> str:
         today = day or date.today()
         return (today - timedelta(days=today.weekday())).isoformat()
@@ -91,28 +126,46 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
-    def add_task(self, project_id: int, title: str) -> None:
+    def add_task(
+        self,
+        project_id: int,
+        title: str,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT INTO tasks (project_id, title, is_completed) VALUES (%s, %s, 0)",
-            (project_id, title.strip()),
+            "INSERT INTO tasks (project_id, title, due_date, priority, is_completed) VALUES (%s, %s, %s, %s, 0)",
+            (project_id, title.strip(), due_date_iso, priority_val),
         )
         cur.close()
         self.conn.commit()
 
-    def add_task_batch(self, project_id: int, base_title: str, count: int) -> int:
+    def add_task_batch(
+        self,
+        project_id: int,
+        base_title: str,
+        count: int,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
         clean_title = base_title.strip()
         if not clean_title:
             raise ValueError("Base title is required.")
         if count < 1:
             raise ValueError("Count must be at least 1.")
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
 
         cur = self.conn.cursor()
         try:
             for idx in range(1, count + 1):
                 cur.execute(
-                    "INSERT INTO tasks (project_id, title, is_completed) VALUES (%s, %s, 0)",
-                    (project_id, f"{clean_title} {idx}"),
+                    "INSERT INTO tasks (project_id, title, due_date, priority, is_completed) VALUES (%s, %s, %s, %s, 0)",
+                    (project_id, f"{clean_title} {idx}", due_date_iso, priority_val),
                 )
         finally:
             cur.close()
@@ -164,7 +217,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT t.id, t.title, t.is_completed, p.name AS project_name
+            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, p.name AS project_name
             FROM daily_selection ds
             JOIN tasks t ON t.id = ds.task_id
             JOIN projects p ON p.id = t.project_id
@@ -210,7 +263,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT t.id, t.title, t.project_id, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             WHERE t.is_completed = 0
@@ -241,18 +294,29 @@ class TimeOnTask:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT id, title, project_id, is_completed FROM tasks WHERE id = %s",
+            "SELECT id, title, project_id, due_date, priority, is_completed FROM tasks WHERE id = %s",
             (task_id,),
         )
         row = cur.fetchone()
         cur.close()
         return row
 
-    def update_task(self, task_id: int, project_id: int, title: str, is_completed: bool) -> None:
+    def update_task(
+        self,
+        task_id: int,
+        project_id: int,
+        title: str,
+        is_completed: bool,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
         cur = self.conn.cursor()
         cur.execute(
-            "UPDATE tasks SET project_id = %s, title = %s, is_completed = %s WHERE id = %s",
-            (project_id, title.strip(), int(is_completed), task_id),
+            "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s, is_completed = %s WHERE id = %s",
+            (project_id, title.strip(), due_date_iso, priority_val, int(is_completed), task_id),
         )
         cur.close()
         self.conn.commit()
@@ -265,7 +329,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             f"""
-            SELECT t.id, t.title, t.project_id, t.is_completed, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             ORDER BY {order_clause}
@@ -291,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("add-task")
     t.add_argument("project_id", type=int)
     t.add_argument("title")
+    t.add_argument("--due-date")
+    t.add_argument("--priority", type=int, choices=[1, 2, 3])
 
     g = sub.add_parser("set-goal")
     g.add_argument("task_id", type=int)
@@ -319,7 +385,7 @@ def main() -> None:
             app.add_project(args.name)
             print("Project added")
         elif args.command == "add-task":
-            app.add_task(args.project_id, args.title)
+            app.add_task(args.project_id, args.title, due_date=args.due_date, priority=args.priority)
             print("Task added")
         elif args.command == "set-goal":
             app.set_week_goal(args.task_id)

@@ -16,7 +16,7 @@ These baseline decisions keep implementation and testing consistent as we add mo
 - **Planning remains parent-task based.**
   - Weekly goals target parent tasks.
   - Daily selection (and the max-two-active rule) counts parent tasks only.
-- **Priority scale** (for upcoming priority support):
+- **Priority scale:**
   - `1 = High`
   - `2 = Medium`
   - `3 = Low`
@@ -62,6 +62,7 @@ Open: http://localhost:5000
 
 - Create one task at a time with a project selector that defaults to your last-used project.
 - Sort the task list by created order or by project.
+- Optionally set due date and priority when creating/editing tasks.
 - Edit existing tasks from the Tasks page (title, project, and completion status).
 - Bulk create numbered tasks from a base title (example: `Record item` + `12` creates `Record item 1..12`).
 
@@ -70,6 +71,7 @@ Open: http://localhost:5000
 ```bash
 python timeontask.py add-project "Client Work"
 python timeontask.py add-task 1 "Draft proposal"
+python timeontask.py add-task 1 "Follow up" --due-date 2026-03-20 --priority 1
 python timeontask.py set-goal 1
 python timeontask.py select-today 1
 python timeontask.py complete 1
