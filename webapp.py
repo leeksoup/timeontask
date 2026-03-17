@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
@@ -8,6 +9,13 @@ from timeontask import TimeOnTask
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "timeontask-dev"
+
+
+def bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def week_start_iso() -> str:
@@ -330,4 +338,10 @@ def week_review() -> str:
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug_mode = bool_env("FLASK_DEBUG", default=False)
+    app.run(
+        host=os.getenv("WEBAPP_HOST", "0.0.0.0"),
+        port=int(os.getenv("WEBAPP_PORT", "5000")),
+        debug=debug_mode,
+        use_reloader=debug_mode,
+    )

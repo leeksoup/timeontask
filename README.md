@@ -58,6 +58,12 @@ python webapp.py
 
 Open: http://localhost:5000
 
+### Runtime options
+
+- `FLASK_DEBUG=1` enables debug mode + auto-reloader (best for foreground development).
+- Default is production-style single process (`FLASK_DEBUG=0`), which is safer for background runs.
+- `WEBAPP_HOST` and `WEBAPP_PORT` can override bind host/port (defaults: `0.0.0.0` / `5000`).
+
 ### Tasks UI highlights
 
 - Create one task at a time with a project selector that defaults to your last-used project.
