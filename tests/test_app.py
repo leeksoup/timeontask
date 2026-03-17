@@ -104,6 +104,19 @@ class FakeCursor:
                 }
             )
             return
+        if q.startswith("insert into meetings"):
+            self.db["meetings"].append(
+                {
+                    "id": len(self.db["meetings"]) + 1,
+                    "project_id": params[0],
+                    "title": params[1],
+                    "weekday": params[2],
+                    "start_time": params[3],
+                    "duration_minutes": params[4],
+                    "is_active": 1,
+                }
+            )
+            return
         if "select count(*) as open_count" in q:
             today = params[0]
             open_count = 0
@@ -232,6 +245,34 @@ class FakeCursor:
                 )
             self.results = out
             return
+        if "from meetings m left join projects p on p.id = m.project_id" in q and "where m.is_active = 1 and m.weekday = %s" in q:
+            weekday = params[0]
+            out = []
+            for meeting in self.db["meetings"]:
+                if meeting["is_active"] != 1 or meeting["weekday"] != weekday:
+                    continue
+                project_name = None
+                if meeting["project_id"] is not None:
+                    project = next((p for p in self.db["projects"] if p["id"] == meeting["project_id"]), None)
+                    project_name = project["name"] if project else None
+                out.append({**meeting, "project_name": project_name})
+            out.sort(key=lambda m: (m["start_time"], m["id"]))
+            self.results = out
+            return
+        if "from meetings m left join projects p on p.id = m.project_id" in q and "where m.is_active = 1" in q:
+            out = []
+            for meeting in self.db["meetings"]:
+                if meeting["is_active"] != 1:
+                    continue
+                project_name = None
+                if meeting["project_id"] is not None:
+                    project = next((p for p in self.db["projects"] if p["id"] == meeting["project_id"]), None)
+                    project_name = project["name"] if project else None
+                out.append({**meeting, "project_name": project_name})
+            out.sort(key=lambda m: (m["weekday"], m["start_time"], m["id"]))
+            self.results = out
+            return
+
         if q.startswith("select id, title, project_id, due_date, priority, is_completed from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
@@ -290,6 +331,7 @@ class FakeConnection:
             "task_recurrence_month_days": [],
             "task_recurrence_year_days": [],
             "subtasks": [],
+            "meetings": [],
         }
 
     def cursor(self, dictionary=False):
@@ -468,3 +510,28 @@ def test_subtasks_do_not_change_parent_task_planning_semantics(tracker: TimeOnTa
     assert review.completed == 0
     assert today_progress.total == 1
     assert today_progress.completed == 0
+
+
+def test_meetings_can_be_created_and_listed(tracker: TimeOnTask):
+    tracker.add_project("Ops")
+    tracker.add_meeting("Weekly Sync", weekday=2, start_time="09:30", duration_minutes=45, project_id=1)
+    tracker.add_meeting("Planning", weekday=0, start_time="10:00", duration_minutes=30)
+
+    meetings = tracker.list_meetings()
+    assert len(meetings) == 2
+    assert meetings[0]["weekday"] == 0
+    assert meetings[1]["weekday"] == 2
+    assert meetings[1]["project_name"] == "Ops"
+
+
+def test_today_meetings_filter_by_weekday(tracker: TimeOnTask):
+    tracker.add_meeting("Monday standup", weekday=0, start_time="08:00", duration_minutes=15)
+    tracker.add_meeting("Tuesday standup", weekday=1, start_time="08:00", duration_minutes=15)
+
+    monday = tracker.list_today_meetings(day=date(2026, 3, 9))
+    tuesday = tracker.list_today_meetings(day=date(2026, 3, 10))
+
+    assert len(monday) == 1
+    assert monday[0]["title"] == "Monday standup"
+    assert len(tuesday) == 1
+    assert tuesday[0]["title"] == "Tuesday standup"

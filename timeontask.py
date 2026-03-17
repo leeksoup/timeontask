@@ -77,6 +77,20 @@ class TimeOnTask:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS meetings (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NULL,
+              title VARCHAR(255) NOT NULL,
+              weekday TINYINT NOT NULL,
+              start_time TIME NOT NULL,
+              duration_minutes INT NOT NULL,
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS task_templates (
               id INT PRIMARY KEY AUTO_INCREMENT,
               project_id INT NOT NULL,
@@ -473,6 +487,78 @@ class TimeOnTask:
             WHERE t.is_active = 1
             ORDER BY t.id
             """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def add_meeting(
+        self,
+        title: str,
+        weekday: int,
+        start_time: str,
+        duration_minutes: int,
+        project_id: int | None = None,
+    ) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Meeting title is required.")
+        if weekday < 0 or weekday > 6:
+            raise ValueError("Weekday must be between 0 (Mon) and 6 (Sun).")
+        if duration_minutes < 1:
+            raise ValueError("Duration must be at least 1 minute.")
+        try:
+            parts = start_time.strip().split(":")
+            if len(parts) != 2:
+                raise ValueError
+            hh = int(parts[0])
+            mm = int(parts[1])
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                raise ValueError
+            start_time_clean = f"{hh:02d}:{mm:02d}:00"
+        except ValueError as exc:
+            raise ValueError("Start time must be HH:MM (24-hour).") from exc
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO meetings (project_id, title, weekday, start_time, duration_minutes, is_active)
+            VALUES (%s, %s, %s, %s, %s, 1)
+            """,
+            (project_id, clean_title, weekday, start_time_clean, duration_minutes),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def list_meetings(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.is_active = 1
+            ORDER BY m.weekday, m.start_time, m.id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def list_today_meetings(self, day: date | None = None) -> list[dict[str, Any]]:
+        target = day or date.today()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.is_active = 1 AND m.weekday = %s
+            ORDER BY m.start_time, m.id
+            """,
+            (target.weekday(),),
         )
         rows = cur.fetchall()
         cur.close()

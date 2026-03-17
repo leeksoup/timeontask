@@ -22,6 +22,11 @@ def week_start_iso() -> str:
     return TimeOnTask.week_start(date.today())
 
 
+def weekday_name(value: int) -> str:
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    return names[value] if 0 <= value < len(names) else str(value)
+
+
 @app.route("/")
 def dashboard() -> str:
     tracker = TimeOnTask()
@@ -322,6 +327,51 @@ def edit_task(task_id: int) -> str:
         tracker.close()
 
 
+@app.route("/meetings", methods=["GET", "POST"])
+def meetings() -> str:
+    tracker = TimeOnTask()
+    try:
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            weekday = request.form.get("weekday", "").strip()
+            start_time = request.form.get("start_time", "").strip()
+            duration = request.form.get("duration_minutes", "").strip()
+            project_id = request.form.get("project_id", "").strip()
+
+            if not title or not weekday or not start_time or not duration:
+                flash("Title, weekday, start time, and duration are required.")
+                return redirect(url_for("meetings"))
+
+            try:
+                weekday_int = int(weekday)
+                duration_int = int(duration)
+                project_id_int = int(project_id) if project_id else None
+                tracker.add_meeting(
+                    title=title,
+                    weekday=weekday_int,
+                    start_time=start_time,
+                    duration_minutes=duration_int,
+                    project_id=project_id_int,
+                )
+                flash("Meeting created.")
+            except ValueError as exc:
+                flash(str(exc))
+            return redirect(url_for("meetings"))
+
+        meetings_rows = tracker.list_meetings()
+        for row in meetings_rows:
+            row["weekday_name"] = weekday_name(int(row["weekday"]))
+
+        return render_template(
+            "meetings.html",
+            meetings=meetings_rows,
+            projects=tracker.list_projects(),
+            weekday_choices=[(idx, weekday_name(idx)) for idx in range(7)],
+        )
+    finally:
+        tracker.close()
+
+
 @app.route("/weekly-goals", methods=["GET", "POST"])
 def weekly_goals() -> str:
     tracker = TimeOnTask()
@@ -358,10 +408,15 @@ def today() -> str:
                     flash(str(exc))
             return redirect(url_for("today"))
 
+        meetings_rows = tracker.list_today_meetings()
+        for row in meetings_rows:
+            row["weekday_name"] = weekday_name(int(row["weekday"]))
+
         return render_template(
             "today.html",
             today_rows=tracker.list_today(),
             incomplete=tracker.list_incomplete_tasks(),
+            meetings=meetings_rows,
         )
     finally:
         tracker.close()

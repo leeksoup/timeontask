@@ -2,6 +2,15 @@
 {% block content %}
 <h2>Today</h2>
 <p>Pick tasks for today. You can only have 2 active tasks at a time.</p>
+<h3>Today's meetings</h3>
+<ul>
+  {% for meeting in meetings %}
+    <li>{{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}{% if meeting.project_name %} [{{ meeting.project_name }}]{% endif %}</li>
+  {% else %}
+    <li>No meetings scheduled for today.</li>
+  {% endfor %}
+</ul>
+
 <form method="post">
   <select name="task_id" required>
       <option value="">Choose incomplete task</option>

@@ -73,6 +73,7 @@ Open: http://localhost:5000
 - Bulk create numbered tasks from a base title (example: `Record item` + `12` creates `Record item 1..12`).
 - Define recurring task templates (daily/weekly/monthly/yearly) with optional weekday/month-day/year-date rules.
 - Manage subtasks from the task edit screen (add, mark done/open, delete) while weekly goals/today focus remain parent-task based.
+- Create recurring weekly meetings from the Meetings page and see today's meetings in the Today view.
 
 ## CLI usage
 
