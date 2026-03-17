@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Week Review ({{ week_start }})</h2>
+<p>Goal progress: {{ summary.completed }}/{{ summary.total }}</p>
+<ul>
+  {% for goal in goals %}
+    <li>{{ goal.project_name }} — {{ goal.title }} {% if goal.is_completed %}✅{% else %}⏳{% endif %}</li>
+  {% else %}
+    <li>No weekly goals yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
