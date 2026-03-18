@@ -535,3 +535,38 @@ def test_today_meetings_filter_by_weekday(tracker: TimeOnTask):
     assert monday[0]["title"] == "Monday standup"
     assert len(tuesday) == 1
     assert tuesday[0]["title"] == "Tuesday standup"
+
+
+def test_add_meeting_validates_inputs(tracker: TimeOnTask):
+    with pytest.raises(ValueError, match="Meeting title"):
+        tracker.add_meeting("", weekday=0, start_time="09:00", duration_minutes=30)
+
+    with pytest.raises(ValueError, match="Weekday"):
+        tracker.add_meeting("Invalid weekday", weekday=7, start_time="09:00", duration_minutes=30)
+
+    with pytest.raises(ValueError, match="Start time"):
+        tracker.add_meeting("Invalid time", weekday=1, start_time="9am", duration_minutes=30)
+
+    with pytest.raises(ValueError, match="Duration"):
+        tracker.add_meeting("Invalid duration", weekday=1, start_time="09:00", duration_minutes=0)
+
+
+def test_meetings_do_not_affect_two_task_today_limit(tracker: TimeOnTask):
+    tracker.add_project("Main")
+    tracker.add_task(1, "Task 1")
+    tracker.add_task(1, "Task 2")
+    tracker.add_task(1, "Task 3")
+    tracker.add_meeting("Standup", weekday=0, start_time="09:00", duration_minutes=15)
+
+    monday = date(2026, 3, 9)
+    tracker.select_today_task(1, monday)
+    tracker.select_today_task(2, monday)
+
+    # Meetings shown on Today should not alter task-cap semantics.
+    assert len(tracker.list_today_meetings(monday)) == 1
+    with pytest.raises(ValueError, match="Cannot add more than two active tasks"):
+        tracker.select_today_task(3, monday)
+
+
+def test_meetings_template_exists():
+    assert Path("templates/meetings.html").exists()
