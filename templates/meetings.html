@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Meetings</h2>
+<p>Create recurring weekly meetings and review upcoming weekly schedule slots.</p>
+
+<form method="post">
+  <label>
+    Title
+    <input name="title" required />
+  </label>
+
+  <label>
+    Project (optional)
+    <select name="project_id">
+      <option value="">No project</option>
+      {% for project in projects %}
+      <option value="{{ project.id }}">{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Weekday
+    <select name="weekday" required>
+      {% for value, label in weekday_choices %}
+      <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Start time
+    <input type="time" name="start_time" required />
+  </label>
+
+  <label>
+    Duration (minutes)
+    <input type="number" name="duration_minutes" min="1" value="30" required />
+  </label>
+
+  <button type="submit">Create meeting</button>
+</form>
+
+<h3>Recurring weekly meetings</h3>
+<ul>
+  {% for meeting in meetings %}
+  <li>
+    <strong>{{ meeting.weekday_name }}</strong> {{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}
+    {% if meeting.project_name %}<em>[{{ meeting.project_name }}]</em>{% endif %}
+  </li>
+  {% else %}
+  <li>No meetings configured yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
