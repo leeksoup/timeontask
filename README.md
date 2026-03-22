@@ -75,6 +75,7 @@ Open: http://localhost:5000
 - Manage subtasks from the task edit screen (add, mark done/open, delete) while weekly goals/today focus remain parent-task based.
 - Create recurring weekly meetings from the Meetings page and see today's meetings in the Today view.
 - Create follow-up tasks directly from meetings so meeting outcomes flow into the normal task/planning workflow.
+- Mark weekly goals as deferred or blocked, and carry unfinished goals forward during week review.
 
 ## CLI usage
 

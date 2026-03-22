@@ -19,7 +19,7 @@ class FakeCursor:
 
         if q.startswith("create table"):
             return
-        if q.startswith("alter table tasks add column"):
+        if q.startswith("alter table tasks add column") or q.startswith("alter table weekly_goals add column"):
             return
         if q.startswith("insert into projects"):
             self.db["projects"].append({"id": len(self.db["projects"]) + 1, "name": params[0]})
@@ -51,8 +51,15 @@ class FakeCursor:
             self.lastrowid = len(self.db["tasks"])
             return
         if q.startswith("insert ignore into weekly_goals"):
-            row = {"week_start": params[0], "task_id": params[1]}
-            if row not in self.db["weekly_goals"]:
+            row = {
+                "id": len(self.db["weekly_goals"]) + 1,
+                "week_start": params[0],
+                "task_id": params[1],
+                "review_outcome": None,
+                "review_note": None,
+                "carried_to_week_start": None,
+            }
+            if not any(existing["week_start"] == row["week_start"] and existing["task_id"] == row["task_id"] for existing in self.db["weekly_goals"]):
                 self.db["weekly_goals"].append(row)
             return
         if q.startswith("insert into task_templates"):
@@ -159,6 +166,19 @@ class FakeCursor:
                 if subtask["id"] == params[1]:
                     subtask["is_completed"] = params[0]
             return
+        if q.startswith("update weekly_goals set review_outcome = %s, review_note = %s where id = %s"):
+            for goal in self.db["weekly_goals"]:
+                if goal["id"] == params[2]:
+                    goal["review_outcome"] = params[0]
+                    goal["review_note"] = params[1]
+            return
+        if q.startswith("update weekly_goals set review_outcome = %s, review_note = %s, carried_to_week_start = %s where id = %s"):
+            for goal in self.db["weekly_goals"]:
+                if goal["id"] == params[3]:
+                    goal["review_outcome"] = params[0]
+                    goal["review_note"] = params[1]
+                    goal["carried_to_week_start"] = params[2]
+            return
         if q.startswith("delete from subtasks where id"):
             subtask_id = params[0]
             self.db["subtasks"] = [s for s in self.db["subtasks"] if s["id"] != subtask_id]
@@ -182,7 +202,7 @@ class FakeCursor:
                     )
             self.results = out
             return
-        if "from weekly_goals wg join tasks" in q:
+        if q.startswith("select t.is_completed from weekly_goals wg join tasks"):
             week = params[0]
             out = []
             for wg in self.db["weekly_goals"]:
@@ -190,6 +210,11 @@ class FakeCursor:
                     task = next(t for t in self.db["tasks"] if t["id"] == wg["task_id"])
                     out.append({"is_completed": task["is_completed"]})
             self.results = out
+            return
+        if q.startswith("select id, week_start, task_id from weekly_goals where id"):
+            goal_id = params[0]
+            goal = next((g for g in self.db["weekly_goals"] if g["id"] == goal_id), None)
+            self.results = [goal] if goal else []
             return
         if "from task_recurrence_rules r join task_templates t" in q:
             out = []
@@ -293,6 +318,29 @@ class FakeCursor:
             self.results = [{**meeting, "project_name": project_name}]
             return
 
+        if "select wg.id, wg.week_start, wg.review_outcome, wg.review_note, wg.carried_to_week_start," in q:
+            week = params[0]
+            out = []
+            for wg in self.db["weekly_goals"]:
+                if wg["week_start"] == week:
+                    task = next(t for t in self.db["tasks"] if t["id"] == wg["task_id"])
+                    project = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                    out.append(
+                        {
+                            "id": wg["id"],
+                            "week_start": wg["week_start"],
+                            "review_outcome": wg["review_outcome"],
+                            "review_note": wg["review_note"],
+                            "carried_to_week_start": wg["carried_to_week_start"],
+                            "task_id": task["id"],
+                            "title": task["title"],
+                            "is_completed": task["is_completed"],
+                            "project_name": project["name"],
+                        }
+                    )
+            out.sort(key=lambda row: row["id"])
+            self.results = out
+            return
         if q.startswith("select id, title, project_id, due_date, priority, is_completed from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
@@ -590,6 +638,51 @@ def test_create_task_from_meeting_requires_existing_meeting_and_project_choice(t
 
     with pytest.raises(ValueError, match="Meeting not found"):
         tracker.create_task_from_meeting(999, project_id=1)
+
+
+def test_week_goal_outcome_can_be_marked_deferred_or_blocked(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+    tracker.set_week_goal(1, day=date(2026, 3, 9))
+
+    tracker.set_week_goal_outcome(1, "deferred", note="Priority changed")
+    goals = tracker.list_week_goals(day=date(2026, 3, 9))
+    assert goals[0]["review_outcome"] == "deferred"
+    assert goals[0]["review_note"] == "Priority changed"
+
+    tracker.set_week_goal_outcome(1, "blocked", note="Waiting on client")
+    goals = tracker.list_week_goals(day=date(2026, 3, 9))
+    assert goals[0]["review_outcome"] == "blocked"
+    assert goals[0]["review_note"] == "Waiting on client"
+
+
+def test_carry_week_goal_forward_creates_next_week_goal_and_preserves_task(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+    tracker.set_week_goal(1, day=date(2026, 3, 9))
+
+    tracker.carry_week_goal_forward(1, day=date(2026, 3, 16), note="Still important")
+
+    current_goals = tracker.list_week_goals(day=date(2026, 3, 9))
+    next_goals = tracker.list_week_goals(day=date(2026, 3, 16))
+    assert current_goals[0]["review_outcome"] == "carried_forward"
+    assert current_goals[0]["review_note"] == "Still important"
+    assert current_goals[0]["carried_to_week_start"] == "2026-03-16"
+    assert len(next_goals) == 1
+    assert next_goals[0]["task_id"] == 1
+    assert next_goals[0]["review_outcome"] is None
+
+
+def test_week_goal_outcome_validation_rejects_unknown_outcomes(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+    tracker.set_week_goal(1, day=date(2026, 3, 9))
+
+    with pytest.raises(ValueError, match="Goal outcome"):
+        tracker.set_week_goal_outcome(1, "done")
+
+    with pytest.raises(ValueError, match="Weekly goal not found"):
+        tracker.carry_week_goal_forward(999, day=date(2026, 3, 16))
 
 
 def test_add_meeting_validates_inputs(tracker: TimeOnTask):

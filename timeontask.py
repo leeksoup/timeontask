@@ -158,11 +158,17 @@ class TimeOnTask:
               id INT PRIMARY KEY AUTO_INCREMENT,
               week_start DATE NOT NULL,
               task_id INT NOT NULL,
+              review_outcome VARCHAR(32) NULL,
+              review_note TEXT NULL,
+              carried_to_week_start DATE NULL,
               UNIQUE KEY uniq_week_task (week_start, task_id),
               FOREIGN KEY (task_id) REFERENCES tasks(id)
             ) ENGINE=InnoDB
             """
         )
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS review_outcome VARCHAR(32) NULL")
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS review_note TEXT NULL")
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS carried_to_week_start DATE NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_selection (
@@ -659,8 +665,56 @@ class TimeOnTask:
     def set_week_goal(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT IGNORE INTO weekly_goals (week_start, task_id) VALUES (%s, %s)",
+            "INSERT IGNORE INTO weekly_goals (week_start, task_id, review_outcome, review_note, carried_to_week_start) VALUES (%s, %s, NULL, NULL, NULL)",
             (self.week_start(day), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def _normalize_goal_outcome(self, outcome: str) -> str:
+        clean = outcome.strip().lower()
+        if clean not in {"deferred", "blocked", "carried_forward"}:
+            raise ValueError("Goal outcome must be deferred, blocked, or carried_forward.")
+        return clean
+
+    def set_week_goal_outcome(self, goal_id: int, outcome: str, note: str | None = None) -> None:
+        clean_outcome = self._normalize_goal_outcome(outcome)
+        clean_note = note.strip() if note is not None else None
+        if clean_note == "":
+            clean_note = None
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE weekly_goals SET review_outcome = %s, review_note = %s WHERE id = %s",
+            (clean_outcome, clean_note, goal_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def carry_week_goal_forward(self, goal_id: int, day: date | None = None, note: str | None = None) -> None:
+        clean_note = note.strip() if note is not None else None
+        if clean_note == "":
+            clean_note = None
+
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, week_start, task_id FROM weekly_goals WHERE id = %s", (goal_id,))
+        goal = cur.fetchone()
+        if goal is None:
+            cur.close()
+            raise ValueError("Weekly goal not found.")
+
+        if day is None:
+            current_week = date.fromisoformat(str(goal["week_start"]))
+            target_week = (current_week + timedelta(days=7)).isoformat()
+        else:
+            target_week = self.week_start(day)
+        cur.execute(
+            "INSERT IGNORE INTO weekly_goals (week_start, task_id, review_outcome, review_note, carried_to_week_start) VALUES (%s, %s, NULL, NULL, NULL)",
+            (target_week, goal["task_id"]),
+        )
+        cur.execute(
+            "UPDATE weekly_goals SET review_outcome = %s, review_note = %s, carried_to_week_start = %s WHERE id = %s",
+            ("carried_forward", clean_note, target_week, goal_id),
         )
         cur.close()
         self.conn.commit()
@@ -762,7 +816,8 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT wg.id, wg.week_start, t.id AS task_id, t.title, t.is_completed, p.name AS project_name
+            SELECT wg.id, wg.week_start, wg.review_outcome, wg.review_note, wg.carried_to_week_start,
+                   t.id AS task_id, t.title, t.is_completed, p.name AS project_name
             FROM weekly_goals wg
             JOIN tasks t ON t.id = wg.task_id
             JOIN projects p ON p.id = t.project_id

@@ -490,6 +490,37 @@ def week_review() -> str:
         tracker.close()
 
 
+@app.post("/weekly-goals/<int:goal_id>/outcome")
+def set_week_goal_outcome(goal_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        outcome = request.form.get("outcome", "").strip()
+        note = request.form.get("note", "").strip()
+        try:
+            tracker.set_week_goal_outcome(goal_id, outcome, note=note or None)
+            flash("Weekly goal updated.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("week_review"))
+    finally:
+        tracker.close()
+
+
+@app.post("/weekly-goals/<int:goal_id>/carry-forward")
+def carry_week_goal_forward(goal_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        note = request.form.get("note", "").strip()
+        try:
+            tracker.carry_week_goal_forward(goal_id, note=note or None)
+            flash("Weekly goal carried forward.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("week_review"))
+    finally:
+        tracker.close()
+
+
 if __name__ == "__main__":
     debug_mode = bool_env("FLASK_DEBUG", default=False)
     app.run(
