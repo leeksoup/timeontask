@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Week Review ({{ week_start }})</h2>
+<p>Goal progress: {{ summary.completed }}/{{ summary.total }}</p>
+<ul>
+  {% for goal in goals %}
+    <li>
+      {{ goal.project_name }} — {{ goal.title }}
+      {% if goal.is_completed %}
+        ✅
+      {% else %}
+        ⏳
+      {% endif %}
+      {% if goal.review_outcome %}
+        <strong>[{{ goal.review_outcome.replace('_', ' ') }}]</strong>
+      {% endif %}
+      {% if goal.carried_to_week_start %}
+        <em>(carried to {{ goal.carried_to_week_start }})</em>
+      {% endif %}
+      {% if goal.review_note %}
+        <div>Note: {{ goal.review_note }}</div>
+      {% endif %}
+
+      {% if not goal.is_completed %}
+        <form method="post" action="{{ url_for('set_week_goal_outcome', goal_id=goal.id) }}">
+          <input type="hidden" name="outcome" value="deferred" />
+          <input name="note" placeholder="Reason / note (optional)" />
+          <button type="submit">Mark Deferred</button>
+        </form>
+        <form method="post" action="{{ url_for('set_week_goal_outcome', goal_id=goal.id) }}">
+          <input type="hidden" name="outcome" value="blocked" />
+          <input name="note" placeholder="Blocker / note (optional)" />
+          <button type="submit">Mark Blocked</button>
+        </form>
+        <form method="post" action="{{ url_for('carry_week_goal_forward', goal_id=goal.id) }}">
+          <input name="note" placeholder="Carry-forward note (optional)" />
+          <button type="submit">Carry Forward</button>
+        </form>
+      {% endif %}
+    </li>
+  {% else %}
+    <li>No weekly goals yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
