@@ -537,6 +537,20 @@ def test_recurring_monthly_supports_multiple_days(tracker: TimeOnTask):
     assert created == 2
 
 
+def test_recurring_template_rejects_end_date_before_start(tracker: TimeOnTask):
+    tracker.add_project("Ops")
+
+    with pytest.raises(ValueError, match="End date"):
+        tracker.add_recurring_template(1, "Check backups", freq="daily", starts_on="2026-03-10", ends_on="2026-03-09")
+
+
+def test_recurring_template_rejects_invalid_yearly_calendar_dates(tracker: TimeOnTask):
+    tracker.add_project("Ops")
+
+    with pytest.raises(ValueError, match="valid calendar dates"):
+        tracker.add_recurring_template(1, "Impossible date", freq="yearly", year_dates_csv="02-30")
+
+
 def test_task_edit_template_exists():
     assert Path("templates/task_edit.html").exists()
 

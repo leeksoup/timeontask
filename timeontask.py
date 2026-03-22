@@ -4,6 +4,7 @@ import argparse
 import os
 from dataclasses import dataclass
 from datetime import date, timedelta
+import calendar
 from typing import Any, Callable, Iterable
 
 
@@ -262,8 +263,11 @@ class TimeOnTask:
                 day_num = int(day_part)
             except ValueError as exc:
                 raise ValueError("Yearly dates must be MM-DD, comma-separated.") from exc
-            if month_num < 1 or month_num > 12 or day_num < 1 or day_num > 31:
+            if month_num < 1 or month_num > 12:
                 raise ValueError("Yearly MM-DD values are out of range.")
+            max_day = calendar.monthrange(2024, month_num)[1]
+            if day_num < 1 or day_num > max_day:
+                raise ValueError("Yearly MM-DD values must be valid calendar dates.")
             out.append((month_num, day_num))
         return sorted(set(out))
 
@@ -341,6 +345,8 @@ class TimeOnTask:
 
         starts_on_iso = self._normalize_due_date(starts_on) or date.today().isoformat()
         ends_on_iso = self._normalize_due_date(ends_on)
+        if ends_on_iso is not None and ends_on_iso < starts_on_iso:
+            raise ValueError("End date must be on or after the start date.")
         due_date_iso = self._normalize_due_date(due_date)
         priority_val = self._normalize_priority(priority)
         weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
