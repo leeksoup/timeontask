@@ -380,6 +380,14 @@ class FakeCursor:
             out.sort(key=lambda s: (s["position"], s["id"]))
             self.results = out
             return
+        if q.startswith("select id, name from projects order by name"):
+            out = [
+                {"id": p["id"], "name": p["name"]}
+                for p in self.db["projects"]
+            ]
+            out.sort(key=lambda p: (p["name"], p["id"]))
+            self.results = out
+            return
         if "from tasks t join projects p on p.id = t.project_id" in q:
             out = []
             for task in self.db["tasks"]:
