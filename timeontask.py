@@ -13,6 +13,16 @@ class GoalProgress:
     completed: int
 
 
+@dataclass
+class WeekReviewSummary:
+    total: int
+    completed: int
+    deferred: int
+    blocked: int
+    carried_forward: int
+    unreviewed: int
+
+
 def create_mysql_connection() -> Any:
     import mysql.connector
 
@@ -774,20 +784,27 @@ class TimeOnTask:
         return GoalProgress(total=len(rows), completed=done)
 
     def week_review(self, day: date | None = None) -> GoalProgress:
-        cur = self.conn.cursor(dictionary=True)
-        cur.execute(
-            """
-            SELECT t.is_completed
-            FROM weekly_goals wg
-            JOIN tasks t ON t.id = wg.task_id
-            WHERE wg.week_start = %s
-            """,
-            (self.week_start(day),),
+        goals = self.list_week_goals(day)
+        summary = WeekReviewSummary(
+            total=len(goals),
+            completed=0,
+            deferred=0,
+            blocked=0,
+            carried_forward=0,
+            unreviewed=0,
         )
-        rows = cur.fetchall()
-        cur.close()
-        done = sum(1 for r in rows if r["is_completed"])
-        return GoalProgress(total=len(rows), completed=done)
+        for goal in goals:
+            if goal["is_completed"]:
+                summary.completed += 1
+            elif goal["review_outcome"] == "deferred":
+                summary.deferred += 1
+            elif goal["review_outcome"] == "blocked":
+                summary.blocked += 1
+            elif goal["review_outcome"] == "carried_forward":
+                summary.carried_forward += 1
+            else:
+                summary.unreviewed += 1
+        return summary
 
     def list_projects(self) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)

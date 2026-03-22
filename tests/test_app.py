@@ -673,6 +673,31 @@ def test_carry_week_goal_forward_creates_next_week_goal_and_preserves_task(track
     assert next_goals[0]["review_outcome"] is None
 
 
+def test_week_review_summary_breaks_out_goal_statuses(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Completed task")
+    tracker.add_task(1, "Deferred task")
+    tracker.add_task(1, "Blocked task")
+    tracker.add_task(1, "Carry task")
+    tracker.add_task(1, "Unreviewed task")
+
+    for task_id in range(1, 6):
+        tracker.set_week_goal(task_id, day=date(2026, 3, 9))
+
+    tracker.complete_task(1)
+    tracker.set_week_goal_outcome(2, "deferred", note="Later")
+    tracker.set_week_goal_outcome(3, "blocked", note="Dependency")
+    tracker.carry_week_goal_forward(4, day=date(2026, 3, 16), note="Next week")
+
+    summary = tracker.week_review(day=date(2026, 3, 9))
+    assert summary.total == 5
+    assert summary.completed == 1
+    assert summary.deferred == 1
+    assert summary.blocked == 1
+    assert summary.carried_forward == 1
+    assert summary.unreviewed == 1
+
+
 def test_week_goal_outcome_validation_rejects_unknown_outcomes(tracker: TimeOnTask):
     tracker.add_project("Project A")
     tracker.add_task(1, "Parent")
@@ -718,3 +743,7 @@ def test_meetings_do_not_affect_two_task_today_limit(tracker: TimeOnTask):
 
 def test_meetings_template_exists():
     assert Path("templates/meetings.html").exists()
+
+
+def test_week_review_template_exists():
+    assert Path("templates/week_review.html").exists()

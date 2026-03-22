@@ -27,6 +27,18 @@ def weekday_name(value: int) -> str:
     return names[value] if 0 <= value < len(names) else str(value)
 
 
+def review_bucket(goal: dict[str, object]) -> str:
+    if bool(goal["is_completed"]):
+        return "completed"
+    if goal["review_outcome"] == "deferred":
+        return "deferred"
+    if goal["review_outcome"] == "blocked":
+        return "blocked"
+    if goal["review_outcome"] == "carried_forward":
+        return "carried_forward"
+    return "unreviewed"
+
+
 @app.route("/")
 def dashboard() -> str:
     tracker = TimeOnTask()
@@ -485,7 +497,23 @@ def week_review() -> str:
     try:
         goals = tracker.list_week_goals()
         summary = tracker.week_review()
-        return render_template("week_review.html", goals=goals, summary=summary, week_start=week_start_iso())
+        grouped_goals = {
+            "completed": [],
+            "deferred": [],
+            "blocked": [],
+            "carried_forward": [],
+            "unreviewed": [],
+        }
+        for goal in goals:
+            grouped_goals[review_bucket(goal)].append(goal)
+
+        return render_template(
+            "week_review.html",
+            goals=goals,
+            grouped_goals=grouped_goals,
+            summary=summary,
+            week_start=week_start_iso(),
+        )
     finally:
         tracker.close()
 
