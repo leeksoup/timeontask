@@ -27,8 +27,14 @@ class FakeCursor:
         if q.startswith("insert into tasks"):
             due_date = params[2] if len(params) > 2 else None
             priority = params[3] if len(params) > 3 else None
-            template_id = params[4] if len(params) > 4 else None
-            occurrence_date = params[5] if len(params) > 5 else None
+            template_id = None
+            source_meeting_id = None
+            occurrence_date = None
+            if "source_meeting_id" in q:
+                source_meeting_id = params[4] if len(params) > 4 else None
+            elif "occurrence_date" in q:
+                template_id = params[4] if len(params) > 4 else None
+                occurrence_date = params[5] if len(params) > 5 else None
             self.db["tasks"].append(
                 {
                     "id": len(self.db["tasks"]) + 1,
@@ -37,10 +43,12 @@ class FakeCursor:
                     "due_date": due_date,
                     "priority": priority,
                     "template_id": template_id,
+                    "source_meeting_id": source_meeting_id,
                     "occurrence_date": occurrence_date,
                     "is_completed": 0,
                 }
             )
+            self.lastrowid = len(self.db["tasks"])
             return
         if q.startswith("insert ignore into weekly_goals"):
             row = {"week_start": params[0], "task_id": params[1]}
@@ -271,6 +279,18 @@ class FakeCursor:
                 out.append({**meeting, "project_name": project_name})
             out.sort(key=lambda m: (m["weekday"], m["start_time"], m["id"]))
             self.results = out
+            return
+        if "from meetings m left join projects p on p.id = m.project_id" in q and "where m.id = %s" in q:
+            meeting_id = params[0]
+            meeting = next((m for m in self.db["meetings"] if m["id"] == meeting_id), None)
+            if meeting is None:
+                self.results = []
+                return
+            project_name = None
+            if meeting["project_id"] is not None:
+                project = next((p for p in self.db["projects"] if p["id"] == meeting["project_id"]), None)
+                project_name = project["name"] if project else None
+            self.results = [{**meeting, "project_name": project_name}]
             return
 
         if q.startswith("select id, title, project_id, due_date, priority, is_completed from tasks where id"):
@@ -535,6 +555,41 @@ def test_today_meetings_filter_by_weekday(tracker: TimeOnTask):
     assert monday[0]["title"] == "Monday standup"
     assert len(tuesday) == 1
     assert tuesday[0]["title"] == "Tuesday standup"
+
+
+def test_create_task_from_meeting_uses_meeting_project(tracker: TimeOnTask):
+    tracker.add_project("Ops")
+    tracker.add_meeting("Weekly Sync", weekday=2, start_time="09:30", duration_minutes=45, project_id=1)
+
+    task_id = tracker.create_task_from_meeting(1)
+
+    task = tracker.get_task(task_id)
+    assert task is not None
+    assert task["project_id"] == 1
+    assert task["title"] == "Follow up: Weekly Sync"
+
+
+def test_create_task_from_meeting_allows_project_override(tracker: TimeOnTask):
+    tracker.add_project("Ops")
+    tracker.add_project("Admin")
+    tracker.add_meeting("Staff Sync", weekday=2, start_time="09:30", duration_minutes=45)
+
+    task_id = tracker.create_task_from_meeting(1, project_id=2, title="Send recap")
+
+    task = tracker.get_task(task_id)
+    assert task is not None
+    assert task["project_id"] == 2
+    assert task["title"] == "Send recap"
+
+
+def test_create_task_from_meeting_requires_existing_meeting_and_project_choice(tracker: TimeOnTask):
+    tracker.add_meeting("Staff Sync", weekday=2, start_time="09:30", duration_minutes=45)
+
+    with pytest.raises(ValueError, match="project"):
+        tracker.create_task_from_meeting(1)
+
+    with pytest.raises(ValueError, match="Meeting not found"):
+        tracker.create_task_from_meeting(999, project_id=1)
 
 
 def test_add_meeting_validates_inputs(tracker: TimeOnTask):

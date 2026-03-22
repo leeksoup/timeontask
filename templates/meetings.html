@@ -47,6 +47,24 @@
   <li>
     <strong>{{ meeting.weekday_name }}</strong> {{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}
     {% if meeting.project_name %}<em>[{{ meeting.project_name }}]</em>{% endif %}
+    <form method="post" action="{{ url_for('create_task_from_meeting', meeting_id=meeting.id) }}">
+      <input type="hidden" name="next_view" value="meetings" />
+      {% if meeting.project_id %}
+      <input type="hidden" name="project_id" value="{{ meeting.project_id }}" />
+      {% else %}
+      <label>
+        Project
+        <select name="project_id" required>
+          <option value="">Choose project</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <input type="hidden" name="title" value="Follow up: {{ meeting.title }}" />
+      <button type="submit">Create follow-up task</button>
+    </form>
   </li>
   {% else %}
   <li>No meetings configured yet.</li>

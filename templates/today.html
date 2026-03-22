@@ -5,7 +5,24 @@
 <h3>Today's meetings</h3>
 <ul>
   {% for meeting in meetings %}
-    <li>{{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}{% if meeting.project_name %} [{{ meeting.project_name }}]{% endif %}</li>
+    <li>
+      {{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}{% if meeting.project_name %} [{{ meeting.project_name }}]{% endif %}
+      <form class="inline" method="post" action="{{ url_for('create_task_from_meeting', meeting_id=meeting.id) }}">
+        <input type="hidden" name="next_view" value="today" />
+        {% if meeting.project_id %}
+        <input type="hidden" name="project_id" value="{{ meeting.project_id }}" />
+        {% else %}
+        <select name="project_id" required>
+          <option value="">Choose project</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <input type="hidden" name="title" value="Follow up: {{ meeting.title }}" />
+        <button type="submit">Create follow-up task</button>
+      </form>
+    </li>
   {% else %}
     <li>No meetings scheduled for today.</li>
   {% endfor %}

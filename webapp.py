@@ -372,6 +372,40 @@ def meetings() -> str:
         tracker.close()
 
 
+@app.post("/meetings/<int:meeting_id>/task")
+def create_task_from_meeting(meeting_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        project_id = request.form.get("project_id", "").strip()
+        title = request.form.get("title", "").strip()
+        due_date = request.form.get("due_date", "").strip()
+        priority = request.form.get("priority", "").strip()
+        next_view = request.form.get("next_view", "meetings").strip()
+
+        if next_view not in {"meetings", "today"}:
+            next_view = "meetings"
+
+        try:
+            project_id_int = int(project_id) if project_id else None
+            task_id = tracker.create_task_from_meeting(
+                meeting_id,
+                project_id=project_id_int,
+                title=title or None,
+                due_date=due_date or None,
+                priority=priority or None,
+            )
+            task = tracker.get_task(task_id)
+            if task is not None:
+                session["last_project_id"] = task["project_id"]
+            flash("Follow-up task created.")
+        except ValueError as exc:
+            flash(str(exc))
+
+        return redirect(url_for(next_view))
+    finally:
+        tracker.close()
+
+
 @app.route("/weekly-goals", methods=["GET", "POST"])
 def weekly_goals() -> str:
     tracker = TimeOnTask()
@@ -417,6 +451,7 @@ def today() -> str:
             today_rows=tracker.list_today(),
             incomplete=tracker.list_incomplete_tasks(),
             meetings=meetings_rows,
+            projects=tracker.list_projects(),
         )
     finally:
         tracker.close()

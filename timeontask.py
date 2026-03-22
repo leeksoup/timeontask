@@ -46,6 +46,20 @@ class TimeOnTask:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS meetings (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NULL,
+              title VARCHAR(255) NOT NULL,
+              weekday TINYINT NOT NULL,
+              start_time TIME NOT NULL,
+              duration_minutes INT NOT NULL,
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS tasks (
               id INT PRIMARY KEY AUTO_INCREMENT,
               project_id INT NOT NULL,
@@ -53,15 +67,18 @@ class TimeOnTask:
               due_date DATE NULL,
               priority TINYINT NULL,
               template_id INT NULL,
+              source_meeting_id INT NULL,
               occurrence_date DATE NULL,
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
-              FOREIGN KEY (project_id) REFERENCES projects(id)
+              FOREIGN KEY (project_id) REFERENCES projects(id),
+              FOREIGN KEY (source_meeting_id) REFERENCES meetings(id)
             ) ENGINE=InnoDB
             """
         )
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date DATE NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TINYINT NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_meeting_id INT NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
         cur.execute(
             """
@@ -72,20 +89,6 @@ class TimeOnTask:
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
               position INT NOT NULL,
               FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS meetings (
-              id INT PRIMARY KEY AUTO_INCREMENT,
-              project_id INT NULL,
-              title VARCHAR(255) NOT NULL,
-              weekday TINYINT NOT NULL,
-              start_time TIME NOT NULL,
-              duration_minutes INT NOT NULL,
-              is_active TINYINT(1) NOT NULL DEFAULT 1,
-              FOREIGN KEY (project_id) REFERENCES projects(id)
             ) ENGINE=InnoDB
             """
         )
@@ -529,6 +532,58 @@ class TimeOnTask:
         )
         cur.close()
         self.conn.commit()
+
+    def get_meeting(self, meeting_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.id = %s
+            """,
+            (meeting_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def create_task_from_meeting(
+        self,
+        meeting_id: int,
+        project_id: int | None = None,
+        title: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
+        meeting = self.get_meeting(meeting_id)
+        if meeting is None or int(meeting["is_active"]) != 1:
+            raise ValueError("Meeting not found.")
+
+        resolved_project_id = project_id if project_id is not None else meeting["project_id"]
+        if resolved_project_id is None:
+            raise ValueError("Choose a project for this follow-up task.")
+
+        task_title = (title or f"Follow up: {meeting['title']}").strip()
+        if not task_title:
+            raise ValueError("Task title is required.")
+
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO tasks (project_id, title, due_date, priority, template_id, source_meeting_id, occurrence_date, is_completed)
+            VALUES (%s, %s, %s, %s, NULL, %s, NULL, 0)
+            """,
+            (resolved_project_id, task_title, due_date_iso, priority_val, meeting_id),
+        )
+        task_id = cur.lastrowid
+        cur.close()
+        self.conn.commit()
+        return task_id
 
     def list_meetings(self) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)
