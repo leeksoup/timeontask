@@ -30,6 +30,7 @@ class FakeCursor:
             template_id = None
             source_meeting_id = None
             occurrence_date = None
+            completed_on = None
             if "source_meeting_id" in q:
                 source_meeting_id = params[4] if len(params) > 4 else None
             elif "occurrence_date" in q:
@@ -45,6 +46,7 @@ class FakeCursor:
                     "template_id": template_id,
                     "source_meeting_id": source_meeting_id,
                     "occurrence_date": occurrence_date,
+                    "completed_on": completed_on,
                     "is_completed": 0,
                 }
             )
@@ -149,17 +151,19 @@ class FakeCursor:
             return
         if q.startswith("update tasks set is_completed"):
             for task in self.db["tasks"]:
-                if task["id"] == params[0]:
+                if task["id"] == params[1]:
                     task["is_completed"] = 1
+                    task["completed_on"] = params[0]
             return
         if q.startswith("update tasks set project_id"):
             for task in self.db["tasks"]:
-                if task["id"] == params[5]:
+                if task["id"] == params[6]:
                     task["project_id"] = params[0]
                     task["title"] = params[1]
                     task["due_date"] = params[2]
                     task["priority"] = params[3]
                     task["is_completed"] = params[4]
+                    task["completed_on"] = params[5]
             return
         if q.startswith("update subtasks set is_completed"):
             for subtask in self.db["subtasks"]:
@@ -197,9 +201,33 @@ class FakeCursor:
                             "due_date": task["due_date"],
                             "priority": task["priority"],
                             "is_completed": task["is_completed"],
+                            "project_id": task["project_id"],
                             "project_name": proj["name"],
                         }
                     )
+            self.results = out
+            return
+        if "where t.is_completed = 1 and t.completed_on >= %s and t.completed_on <= %s" in q:
+            start_iso, end_iso = params
+            out = []
+            for task in self.db["tasks"]:
+                if task["is_completed"] != 1 or not task["completed_on"]:
+                    continue
+                if not (start_iso <= task["completed_on"] <= end_iso):
+                    continue
+                proj = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                out.append(
+                    {
+                        "id": task["id"],
+                        "title": task["title"],
+                        "project_id": task["project_id"],
+                        "due_date": task["due_date"],
+                        "priority": task["priority"],
+                        "completed_on": task["completed_on"],
+                        "project_name": proj["name"],
+                    }
+                )
+            out.sort(key=lambda row: (row["completed_on"], row["id"]), reverse=True)
             self.results = out
             return
         if q.startswith("select t.is_completed from weekly_goals wg join tasks"):
@@ -341,7 +369,7 @@ class FakeCursor:
             out.sort(key=lambda row: row["id"])
             self.results = out
             return
-        if q.startswith("select id, title, project_id, due_date, priority, is_completed from tasks where id"):
+        if q.startswith("select id, title, project_id, due_date, priority, is_completed, completed_on from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
@@ -417,6 +445,24 @@ def tracker():
     app = TimeOnTask(connection_factory=FakeConnection)
     yield app
     app.close()
+
+
+@pytest.fixture()
+def client(monkeypatch):
+    webapp = pytest.importorskip("webapp")
+    shared = FakeConnection()
+
+    class FakeTracker(TimeOnTask):
+        def __init__(self):
+            super().__init__(connection_factory=lambda: shared)
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(webapp, "TimeOnTask", FakeTracker)
+    webapp.app.config["TESTING"] = True
+    with webapp.app.test_client() as client:
+        yield client
 
 
 def test_projects_tasks_weekly_goals(tracker: TimeOnTask):
@@ -499,6 +545,16 @@ def test_add_task_validates_due_date_and_priority(tracker: TimeOnTask):
 
     with pytest.raises(ValueError, match="Priority"):
         tracker.add_task(1, "Bad priority", priority=4)
+
+
+def test_duplicate_detection_finds_open_task_in_same_project(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Status report")
+
+    duplicates = tracker.find_duplicate_incomplete_tasks(1, " status report ")
+
+    assert len(duplicates) == 1
+    assert duplicates[0].task_id == 1
 
 
 def test_recurring_daily_generation_is_idempotent(tracker: TimeOnTask):
@@ -712,6 +768,21 @@ def test_week_review_summary_breaks_out_goal_statuses(tracker: TimeOnTask):
     assert summary.unreviewed == 1
 
 
+def test_week_review_includes_tasks_completed_during_week(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Finished this week")
+    tracker.add_task(1, "Finished later")
+
+    tracker.complete_task(1, day=date(2026, 3, 10))
+    tracker.complete_task(2, day=date(2026, 3, 18))
+
+    completed = tracker.list_completed_tasks_for_week(day=date(2026, 3, 9))
+    summary = tracker.week_review(day=date(2026, 3, 9))
+
+    assert [task["title"] for task in completed] == ["Finished this week"]
+    assert summary.completed_tasks == 1
+
+
 def test_week_goal_outcome_validation_rejects_unknown_outcomes(tracker: TimeOnTask):
     tracker.add_project("Project A")
     tracker.add_task(1, "Parent")
@@ -761,3 +832,49 @@ def test_meetings_template_exists():
 
 def test_week_review_template_exists():
     assert Path("templates/week_review.html").exists()
+
+
+def test_today_view_groups_picker_by_project_and_marks_overdue(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/projects", data={"name": "Beta"})
+    client.post("/tasks", data={"title": "Late task", "project_id": "1", "due_date": "2026-03-01", "priority": ""})
+    client.post("/tasks", data={"title": "Current task", "project_id": "2", "due_date": "", "priority": ""})
+    client.post("/today", data={"task_id": "1"})
+
+    response = client.get("/today")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '<optgroup label="Alpha">' in html
+    assert '<optgroup label="Beta">' in html
+    assert "OVERDUE" in html
+    assert "Mark Complete" in html
+
+
+def test_tasks_view_shows_project_quick_add_and_duplicate_warning(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks?sort=project", data={"title": "Status report", "project_id": "1", "due_date": "", "priority": ""})
+    duplicate_response = client.post(
+        "/tasks?sort=project",
+        data={"title": "Status report", "project_id": "1", "due_date": "", "priority": ""},
+        follow_redirects=True,
+    )
+
+    html = duplicate_response.get_data(as_text=True)
+
+    assert duplicate_response.status_code == 200
+    assert "Possible duplicate" in html
+    assert "Quick add task for Alpha" in html
+
+
+def test_week_review_view_lists_completed_tasks(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks", data={"title": "Wrap up", "project_id": "1", "due_date": "2026-03-01", "priority": ""})
+    client.post("/tasks/1/complete")
+
+    response = client.get("/week-review")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Completed Tasks This Week" in html
+    assert "Wrap up" in html

@@ -39,6 +39,13 @@ def review_bucket(goal: dict[str, object]) -> str:
     return "unreviewed"
 
 
+def is_overdue(due_date: object, *, today_iso: str | None = None) -> bool:
+    if not due_date:
+        return False
+    compare_to = today_iso or date.today().isoformat()
+    return str(due_date) < compare_to
+
+
 @app.route("/")
 def dashboard() -> str:
     tracker = TimeOnTask()
@@ -98,9 +105,14 @@ def tasks() -> str:
             if title and project_id:
                 try:
                     project_id_int = int(project_id)
+                    duplicates = tracker.find_duplicate_incomplete_tasks(project_id_int, title)
                     tracker.add_task(project_id_int, title, due_date=due_date, priority=priority)
                     session["last_project_id"] = project_id_int
                     flash("Task created.")
+                    if duplicates:
+                        flash(
+                            "Possible duplicate: open task(s) with the same title already exist in this project."
+                        )
                 except ValueError as exc:
                     flash(str(exc))
             else:
@@ -112,10 +124,14 @@ def tasks() -> str:
         valid_ids = {p["id"] for p in projects}
         if last_project_id not in valid_ids:
             last_project_id = projects[0]["id"] if projects else None
+        tasks = tracker.list_tasks(sort_by=sort)
+        today_iso = date.today().isoformat()
+        for task in tasks:
+            task["is_overdue"] = not bool(task["is_completed"]) and is_overdue(task.get("due_date"), today_iso=today_iso)
 
         return render_template(
             "tasks.html",
-            tasks=tracker.list_tasks(sort_by=sort),
+            tasks=tasks,
             projects=projects,
             last_project_id=last_project_id,
             recurring_templates=tracker.list_recurring_templates(),
@@ -457,11 +473,18 @@ def today() -> str:
         meetings_rows = tracker.list_today_meetings()
         for row in meetings_rows:
             row["weekday_name"] = weekday_name(int(row["weekday"]))
+        incomplete = tracker.list_incomplete_tasks(sort_by="project")
+        today_rows = tracker.list_today()
+        today_iso = date.today().isoformat()
+        for row in incomplete:
+            row["is_overdue"] = is_overdue(row.get("due_date"), today_iso=today_iso)
+        for row in today_rows:
+            row["is_overdue"] = not bool(row["is_completed"]) and is_overdue(row.get("due_date"), today_iso=today_iso)
 
         return render_template(
             "today.html",
-            today_rows=tracker.list_today(),
-            incomplete=tracker.list_incomplete_tasks(),
+            today_rows=today_rows,
+            incomplete=incomplete,
             meetings=meetings_rows,
             projects=tracker.list_projects(),
         )
@@ -497,6 +520,10 @@ def week_review() -> str:
     try:
         goals = tracker.list_week_goals()
         summary = tracker.week_review()
+        completed_tasks = tracker.list_completed_tasks_for_week()
+        today_iso = date.today().isoformat()
+        for task in completed_tasks:
+            task["was_overdue"] = is_overdue(task.get("due_date"), today_iso=str(task.get("completed_on") or today_iso))
         grouped_goals = {
             "completed": [],
             "deferred": [],
@@ -511,6 +538,7 @@ def week_review() -> str:
             "week_review.html",
             goals=goals,
             grouped_goals=grouped_goals,
+            completed_tasks=completed_tasks,
             summary=summary,
             week_start=week_start_iso(),
         )

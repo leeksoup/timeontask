@@ -31,23 +31,37 @@
 <form method="post">
   <select name="task_id" required>
       <option value="">Choose incomplete task</option>
-      {% for task in incomplete %}
-      <option value="{{ task.id }}">{{ task.project_name }} — {{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}{% if task.due_date %} (due {{ task.due_date }}){% endif %}</option>
+      {% for project_group in incomplete|groupby('project_name') %}
+      <optgroup label="{{ project_group.grouper }}">
+        {% for task in project_group.list %}
+        <option value="{{ task.id }}">{{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}{% if task.due_date %} (due {{ task.due_date }}){% endif %}{% if task.is_overdue %} — OVERDUE{% endif %}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
   </select>
   <button type="submit">Select for Today</button>
 </form>
-<ul>
+<ul class="task-list task-list-spacious">
   {% for row in today_rows %}
-    <li>
-      {{ row.project_name }} — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}{% if row.due_date %} (due {{ row.due_date }}){% endif %}
-      {% if row.is_completed %}
-        ✅
-      {% else %}
-        <form class="inline" method="post" action="{{ url_for('complete_task', task_id=row.id) }}">
-          <button type="submit">Mark Complete</button>
-        </form>
-      {% endif %}
+    <li class="task-row {% if row.is_overdue %}task-overdue{% endif %}">
+      <div class="task-row-main">
+        <strong>{{ row.project_name }}</strong> — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}
+        {% if row.due_date %}
+          <span class="task-meta">due {{ row.due_date }}</span>
+        {% endif %}
+        {% if row.is_overdue %}
+          <span class="status-pill status-pill-danger">Overdue</span>
+        {% endif %}
+      </div>
+      <div class="task-row-actions">
+        {% if row.is_completed %}
+          <span class="status-pill status-pill-success">Completed</span>
+        {% else %}
+          <form method="post" action="{{ url_for('complete_task', task_id=row.id) }}">
+            <button type="submit">Mark Complete</button>
+          </form>
+        {% endif %}
+      </div>
     </li>
   {% else %}
     <li>No selections today.</li>

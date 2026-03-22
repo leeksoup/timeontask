@@ -15,6 +15,13 @@ class GoalProgress:
 
 
 @dataclass
+class DuplicateTaskWarning:
+    task_id: int
+    title: str
+    is_completed: int
+
+
+@dataclass
 class WeekReviewSummary:
     total: int
     completed: int
@@ -22,6 +29,7 @@ class WeekReviewSummary:
     blocked: int
     carried_forward: int
     unreviewed: int
+    completed_tasks: int = 0
 
 
 def create_mysql_connection() -> Any:
@@ -80,6 +88,7 @@ class TimeOnTask:
               template_id INT NULL,
               source_meeting_id INT NULL,
               occurrence_date DATE NULL,
+              completed_on DATE NULL,
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
               FOREIGN KEY (project_id) REFERENCES projects(id),
               FOREIGN KEY (source_meeting_id) REFERENCES meetings(id)
@@ -91,6 +100,7 @@ class TimeOnTask:
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INT NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_meeting_id INT NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_on DATE NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS subtasks (
@@ -294,6 +304,23 @@ class TimeOnTask:
         )
         cur.close()
         self.conn.commit()
+
+    def find_duplicate_incomplete_tasks(self, project_id: int, title: str) -> list[DuplicateTaskWarning]:
+        clean_title = title.strip().casefold()
+        duplicates: list[DuplicateTaskWarning] = []
+        for task in self.list_incomplete_tasks(sort_by="project"):
+            if int(task["project_id"]) != project_id:
+                continue
+            if str(task["title"]).strip().casefold() != clean_title:
+                continue
+            duplicates.append(
+                DuplicateTaskWarning(
+                    task_id=int(task["id"]),
+                    title=str(task["title"]),
+                    is_completed=int(task["is_completed"]),
+                )
+            )
+        return duplicates
 
     def add_task_batch(
         self,
@@ -760,9 +787,12 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
-    def complete_task(self, task_id: int) -> None:
+    def complete_task(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()
-        cur.execute("UPDATE tasks SET is_completed = 1 WHERE id = %s", (task_id,))
+        cur.execute(
+            "UPDATE tasks SET is_completed = 1, completed_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
         cur.close()
         self.conn.commit()
 
@@ -771,7 +801,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, p.name AS project_name
+            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.project_id, p.name AS project_name
             FROM daily_selection ds
             JOIN tasks t ON t.id = ds.task_id
             JOIN projects p ON p.id = t.project_id
@@ -789,7 +819,7 @@ class TimeOnTask:
         done = sum(1 for r in rows if r["is_completed"])
         return GoalProgress(total=len(rows), completed=done)
 
-    def week_review(self, day: date | None = None) -> GoalProgress:
+    def week_review(self, day: date | None = None) -> WeekReviewSummary:
         goals = self.list_week_goals(day)
         summary = WeekReviewSummary(
             total=len(goals),
@@ -798,6 +828,7 @@ class TimeOnTask:
             blocked=0,
             carried_forward=0,
             unreviewed=0,
+            completed_tasks=len(self.list_completed_tasks_for_week(day)),
         )
         for goal in goals:
             if goal["is_completed"]:
@@ -812,6 +843,25 @@ class TimeOnTask:
                 summary.unreviewed += 1
         return summary
 
+    def list_completed_tasks_for_week(self, day: date | None = None) -> list[dict[str, Any]]:
+        start_iso = self.week_start(day)
+        start_day = date.fromisoformat(start_iso)
+        end_iso = (start_day + timedelta(days=6)).isoformat()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.completed_on, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.is_completed = 1 AND t.completed_on >= %s AND t.completed_on <= %s
+            ORDER BY t.completed_on DESC, t.id DESC
+            """,
+            (start_iso, end_iso),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
     def list_projects(self) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)
         cur.execute("SELECT id, name FROM projects ORDER BY name")
@@ -820,15 +870,18 @@ class TimeOnTask:
         return rows
 
 
-    def list_incomplete_tasks(self) -> list[dict[str, Any]]:
+    def list_incomplete_tasks(self, sort_by: str = "created") -> list[dict[str, Any]]:
+        order_clause = "t.id"
+        if sort_by == "project":
+            order_clause = "p.name, t.title, t.id"
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
-            """
+            f"""
             SELECT t.id, t.title, t.project_id, t.due_date, t.priority, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             WHERE t.is_completed = 0
-            ORDER BY t.id
+            ORDER BY {order_clause}
             """
         )
         rows = cur.fetchall()
@@ -856,7 +909,7 @@ class TimeOnTask:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT id, title, project_id, due_date, priority, is_completed FROM tasks WHERE id = %s",
+            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on FROM tasks WHERE id = %s",
             (task_id,),
         )
         row = cur.fetchone()
@@ -874,11 +927,17 @@ class TimeOnTask:
     ) -> None:
         due_date_iso = self._normalize_due_date(due_date)
         priority_val = self._normalize_priority(priority)
+        existing = self.get_task(task_id)
+        completed_on = existing.get("completed_on") if existing else None
+        if is_completed:
+            completed_on = completed_on or date.today().isoformat()
+        else:
+            completed_on = None
 
         cur = self.conn.cursor()
         cur.execute(
-            "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s, is_completed = %s WHERE id = %s",
-            (project_id, title.strip(), due_date_iso, priority_val, int(is_completed), task_id),
+            "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s, is_completed = %s, completed_on = %s WHERE id = %s",
+            (project_id, title.strip(), due_date_iso, priority_val, int(is_completed), completed_on, task_id),
         )
         cur.close()
         self.conn.commit()

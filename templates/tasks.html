@@ -96,17 +96,54 @@
 {% if tasks %}
   {% if sort == 'project' %}
     {% for project_group in tasks|groupby('project_name') %}
-      <h3>{{ project_group.grouper }}</h3>
-      <ul>
+      <section class="project-task-group">
+      <div class="section-heading">
+        <h3>{{ project_group.grouper }}</h3>
+      </div>
+      <form class="quick-add-form" method="post">
+        <input type="hidden" name="sort" value="{{ sort }}" />
+        <input type="hidden" name="project_id" value="{{ project_group.list[0].project_id }}" />
+        <input name="title" placeholder="Quick add task for {{ project_group.grouper }}" required />
+        <input name="due_date" type="date" />
+        <select name="priority">
+          <option value="">No priority</option>
+          <option value="1">High (1)</option>
+          <option value="2">Medium (2)</option>
+          <option value="3">Low (3)</option>
+        </select>
+        <button type="submit">Add to {{ project_group.grouper }}</button>
+      </form>
+      <ul class="task-list">
         {% for task in project_group.list %}
-          <li>#{{ task.id }} — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}{% if task.due_date %} due {{ task.due_date }}{% endif %} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a></li>
+          <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
+            <div class="task-row-main">
+              #{{ task.id }} — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
+              {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
+              {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
+            </div>
+            <div class="task-row-actions">
+              {% if task.is_completed %}✅{% else %}⏳{% endif %}
+              <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
+            </div>
+          </li>
         {% endfor %}
       </ul>
+      </section>
     {% endfor %}
   {% else %}
-    <ul>
+    <ul class="task-list">
       {% for task in tasks %}
-        <li>#{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}{% if task.due_date %} due {{ task.due_date }}{% endif %} {% if task.is_completed %}✅{% else %}⏳{% endif %} <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a></li>
+        <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
+          <div class="task-row-main">
+            #{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
+            {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
+            {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
+          </div>
+          <div class="task-row-actions">
+            {% if task.is_completed %}✅{% else %}⏳{% endif %}
+            <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
+          </div>
+        </li>
       {% endfor %}
     </ul>
   {% endif %}

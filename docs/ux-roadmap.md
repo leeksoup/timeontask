@@ -53,9 +53,10 @@ These are still important, but they introduce more state-changing operations tha
    - Nice navigation improvement.
    - Best implemented alongside project-focused pages or filtered task views.
 
-8. **Projects: delete project**
-   - Potentially destructive because projects are connected to tasks, meetings, and goals.
-   - Should come after archive/delete strategy is decided.
+8. **Projects: archive project**
+   - Preferred over deletion for now.
+   - Safer because projects are connected to tasks, meetings, and goals.
+   - Can later evolve into a broader data-retention strategy.
 
 ### Phase 3: Safety and polish foundations
 
@@ -124,7 +125,7 @@ If we want the best near-term user impact, the next sprint should focus on:
 
 Before building the delete-related items, decide:
 
-- Should deletion be hard delete, soft delete, or archive?
+- Should task deletion be hard delete, soft delete, or archive?
 - What happens to weekly goals if a task is deleted?
 - What happens to meetings linked to a project that is deleted?
 - Should completed tasks appear in Weekly Review only if they were weekly goals, or all completed tasks for the week?
@@ -146,7 +147,8 @@ Before building the delete-related items, decide:
 - Soft delete / undo foundation.
 - Delete task from edit screen.
 - Rename project.
-- Delete/archive project.
+- Edit project names.
+- Archive project.
 
 ### Milestone D: Information architecture
 - Project dashboard pages.
