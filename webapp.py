@@ -82,7 +82,51 @@ def projects() -> str:
                 flash("Project name is required.")
             return redirect(url_for("projects"))
 
-        return render_template("projects.html", projects=tracker.list_projects())
+        projects = tracker.list_projects(include_archived=True)
+        active_projects = [project for project in projects if not project["is_archived"]]
+        archived_projects = [project for project in projects if project["is_archived"]]
+        return render_template(
+            "projects.html",
+            projects=active_projects,
+            archived_projects=archived_projects,
+        )
+    finally:
+        tracker.close()
+
+
+@app.post("/projects/<int:project_id>/edit")
+def edit_project(project_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        name = request.form.get("name", "").strip()
+        try:
+            tracker.rename_project(project_id, name)
+            flash("Project updated.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("projects"))
+    finally:
+        tracker.close()
+
+
+@app.post("/projects/<int:project_id>/archive")
+def archive_project(project_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        tracker.archive_project(project_id)
+        flash("Project archived.")
+        return redirect(url_for("projects"))
+    finally:
+        tracker.close()
+
+
+@app.post("/projects/<int:project_id>/restore")
+def restore_project(project_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        tracker.restore_project(project_id)
+        flash("Project restored.")
+        return redirect(url_for("projects"))
     finally:
         tracker.close()
 
@@ -125,13 +169,18 @@ def tasks() -> str:
         if last_project_id not in valid_ids:
             last_project_id = projects[0]["id"] if projects else None
         tasks = tracker.list_tasks(sort_by=sort)
+        archived_tasks = tracker.list_tasks(sort_by=sort, include_archived=True)
+        archived_tasks = [task for task in archived_tasks if task["is_archived"]]
         today_iso = date.today().isoformat()
         for task in tasks:
             task["is_overdue"] = not bool(task["is_completed"]) and is_overdue(task.get("due_date"), today_iso=today_iso)
+        for task in archived_tasks:
+            task["is_overdue"] = False
 
         return render_template(
             "tasks.html",
             tasks=tasks,
+            archived_tasks=archived_tasks,
             projects=projects,
             last_project_id=last_project_id,
             recurring_templates=tracker.list_recurring_templates(),
@@ -351,6 +400,34 @@ def edit_task(task_id: int) -> str:
             subtasks=tracker.list_subtasks(task_id),
             sort=sort,
         )
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/<int:task_id>/archive")
+def archive_task(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+        tracker.archive_task(task_id)
+        flash("Task archived.")
+        return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/<int:task_id>/restore")
+def restore_task(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+        tracker.restore_task(task_id)
+        flash("Task restored.")
+        return redirect(url_for("tasks", sort=sort))
     finally:
         tracker.close()
 

@@ -41,6 +41,21 @@
   <a href="{{ url_for('tasks', sort=sort) }}">Cancel</a>
 </form>
 
+<section>
+  <h3>Task Status</h3>
+  {% if task.is_archived %}
+    <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Restore Task</button>
+    </form>
+  {% else %}
+    <form method="post" action="{{ url_for('archive_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Archive Task</button>
+    </form>
+  {% endif %}
+</section>
+
 <h3>Subtasks</h3>
 <form method="post" action="{{ url_for('add_subtask', task_id=task.id) }}">
   <input type="hidden" name="sort" value="{{ sort }}" />

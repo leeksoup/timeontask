@@ -19,10 +19,21 @@ class FakeCursor:
 
         if q.startswith("create table"):
             return
-        if q.startswith("alter table tasks add column") or q.startswith("alter table weekly_goals add column"):
+        if (
+            q.startswith("alter table tasks add column")
+            or q.startswith("alter table weekly_goals add column")
+            or q.startswith("alter table projects add column")
+        ):
             return
         if q.startswith("insert into projects"):
-            self.db["projects"].append({"id": len(self.db["projects"]) + 1, "name": params[0]})
+            self.db["projects"].append(
+                {
+                    "id": len(self.db["projects"]) + 1,
+                    "name": params[0],
+                    "is_archived": 0,
+                    "archived_on": None,
+                }
+            )
             return
         if q.startswith("insert into tasks"):
             due_date = params[2] if len(params) > 2 else None
@@ -47,10 +58,29 @@ class FakeCursor:
                     "source_meeting_id": source_meeting_id,
                     "occurrence_date": occurrence_date,
                     "completed_on": completed_on,
+                    "is_archived": 0,
+                    "archived_on": None,
                     "is_completed": 0,
                 }
             )
             self.lastrowid = len(self.db["tasks"])
+            return
+        if q.startswith("update projects set name = %s where id = %s"):
+            for project in self.db["projects"]:
+                if project["id"] == params[1]:
+                    project["name"] = params[0]
+            return
+        if q.startswith("update projects set is_archived = 1, archived_on = %s where id = %s"):
+            for project in self.db["projects"]:
+                if project["id"] == params[1]:
+                    project["is_archived"] = 1
+                    project["archived_on"] = params[0]
+            return
+        if q.startswith("update projects set is_archived = 0, archived_on = null where id = %s"):
+            for project in self.db["projects"]:
+                if project["id"] == params[0]:
+                    project["is_archived"] = 0
+                    project["archived_on"] = None
             return
         if q.startswith("insert ignore into weekly_goals"):
             row = {
@@ -140,7 +170,8 @@ class FakeCursor:
             for ds in self.db["daily_selection"]:
                 if ds["day_date"] == today:
                     task = next(t for t in self.db["tasks"] if t["id"] == ds["task_id"])
-                    if task["is_completed"] == 0:
+                    project = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                    if task["is_completed"] == 0 and task["is_archived"] == 0 and project["is_archived"] == 0:
                         open_count += 1
             self.results = [{"open_count": open_count}]
             return
@@ -154,6 +185,18 @@ class FakeCursor:
                 if task["id"] == params[1]:
                     task["is_completed"] = 1
                     task["completed_on"] = params[0]
+            return
+        if q.startswith("update tasks set is_archived = 1, archived_on = %s where id = %s"):
+            for task in self.db["tasks"]:
+                if task["id"] == params[1]:
+                    task["is_archived"] = 1
+                    task["archived_on"] = params[0]
+            return
+        if q.startswith("update tasks set is_archived = 0, archived_on = null where id = %s"):
+            for task in self.db["tasks"]:
+                if task["id"] == params[0]:
+                    task["is_archived"] = 0
+                    task["archived_on"] = None
             return
         if q.startswith("update tasks set project_id"):
             for task in self.db["tasks"]:
@@ -194,6 +237,8 @@ class FakeCursor:
                 if ds["day_date"] == today:
                     task = next(t for t in self.db["tasks"] if t["id"] == ds["task_id"])
                     proj = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                    if task["is_archived"] == 1 or proj["is_archived"] == 1:
+                        continue
                     out.append(
                         {
                             "id": task["id"],
@@ -205,6 +250,21 @@ class FakeCursor:
                             "project_name": proj["name"],
                         }
                     )
+            self.results = out
+            return
+        if q.startswith("select id, name, is_archived, archived_on from projects where id = %s"):
+            project_id = params[0]
+            project = next((p for p in self.db["projects"] if p["id"] == project_id), None)
+            self.results = [project] if project else []
+            return
+        if q.startswith("select id, name, is_archived, archived_on from projects where is_archived = 0 order by name"):
+            out = [p for p in self.db["projects"] if p["is_archived"] == 0]
+            out.sort(key=lambda p: p["name"])
+            self.results = out
+            return
+        if q.startswith("select id, name, is_archived, archived_on from projects order by is_archived, name"):
+            out = list(self.db["projects"])
+            out.sort(key=lambda p: (p["is_archived"], p["name"]))
             self.results = out
             return
         if "where t.is_completed = 1 and t.completed_on >= %s and t.completed_on <= %s" in q:
@@ -369,7 +429,7 @@ class FakeCursor:
             out.sort(key=lambda row: row["id"])
             self.results = out
             return
-        if q.startswith("select id, title, project_id, due_date, priority, is_completed, completed_on from tasks where id"):
+        if q.startswith("select id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
@@ -392,6 +452,14 @@ class FakeCursor:
             out = []
             for task in self.db["tasks"]:
                 proj = next(p for p in self.db["projects"] if p["id"] == task["project_id"])
+                if "where t.is_archived = 0 and p.is_archived = 0" in q and (task["is_archived"] == 1 or proj["is_archived"] == 1):
+                    continue
+                if "where t.is_completed = 0 and t.is_archived = 0 and p.is_archived = 0" in q and (
+                    task["is_completed"] == 1 or task["is_archived"] == 1 or proj["is_archived"] == 1
+                ):
+                    continue
+                if "where t.is_completed = 0 order by" in q and "t.is_archived = 0" not in q and task["is_completed"] == 1:
+                    continue
                 out.append(
                     {
                         "id": task["id"],
@@ -400,6 +468,8 @@ class FakeCursor:
                         "due_date": task["due_date"],
                         "priority": task["priority"],
                         "is_completed": task["is_completed"],
+                        "is_archived": task["is_archived"],
+                        "archived_on": task["archived_on"],
                         "project_name": proj["name"],
                     }
                 )
@@ -563,6 +633,42 @@ def test_duplicate_detection_finds_open_task_in_same_project(tracker: TimeOnTask
 
     assert len(duplicates) == 1
     assert duplicates[0].task_id == 1
+
+
+def test_projects_can_be_renamed_archived_and_restored(tracker: TimeOnTask):
+    tracker.add_project("Projct A")
+
+    tracker.rename_project(1, "Project A")
+    tracker.archive_project(1, day=date(2026, 3, 23))
+
+    active = tracker.list_projects()
+    all_projects = tracker.list_projects(include_archived=True)
+    assert active == []
+    assert all_projects[0]["name"] == "Project A"
+    assert all_projects[0]["is_archived"] == 1
+    assert all_projects[0]["archived_on"] == "2026-03-23"
+
+    tracker.restore_project(1)
+    restored = tracker.list_projects()
+    assert restored[0]["name"] == "Project A"
+    assert restored[0]["is_archived"] == 0
+
+
+def test_tasks_can_be_archived_and_restored(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Archive me")
+
+    tracker.archive_task(1, day=date(2026, 3, 23))
+
+    assert tracker.list_tasks() == []
+    archived = tracker.list_tasks(include_archived=True)
+    assert archived[0]["is_archived"] == 1
+    assert archived[0]["archived_on"] == "2026-03-23"
+
+    tracker.restore_task(1)
+    restored = tracker.list_tasks()
+    assert restored[0]["title"] == "Archive me"
+    assert restored[0]["is_archived"] == 0
 
 
 def test_recurring_daily_generation_is_idempotent(tracker: TimeOnTask):
@@ -886,3 +992,38 @@ def test_week_review_view_lists_completed_tasks(client):
     assert response.status_code == 200
     assert "Completed Tasks This Week" in html
     assert "Wrap up" in html
+
+
+def test_projects_view_supports_rename_archive_and_restore(client):
+    client.post("/projects", data={"name": "Projct A"})
+    client.post("/projects/1/edit", data={"name": "Project A"})
+
+    renamed = client.get("/projects").get_data(as_text=True)
+    assert "Project A" in renamed
+    assert "Rename" in renamed
+
+    client.post("/projects/1/archive")
+    archived = client.get("/projects").get_data(as_text=True)
+    assert "Archived Projects" in archived
+    assert "Restore" in archived
+
+    client.post("/projects/1/restore")
+    restored = client.get("/projects").get_data(as_text=True)
+    assert "Project A" in restored
+
+
+def test_tasks_view_and_edit_support_archive_and_restore(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks", data={"title": "Archive me", "project_id": "1", "due_date": "", "priority": ""})
+
+    edit_page = client.get("/tasks/1/edit").get_data(as_text=True)
+    assert "Archive Task" in edit_page
+
+    client.post("/tasks/1/archive", data={"sort": "created"})
+    archived_page = client.get("/tasks").get_data(as_text=True)
+    assert "Archived Tasks" in archived_page
+    assert "Restore" in archived_page
+
+    client.post("/tasks/1/restore", data={"sort": "created"})
+    restored_page = client.get("/tasks").get_data(as_text=True)
+    assert "Archive me" in restored_page

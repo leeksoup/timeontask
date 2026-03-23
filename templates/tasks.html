@@ -152,4 +152,24 @@
     <li>No tasks yet.</li>
   </ul>
 {% endif %}
+
+<h3>Archived Tasks</h3>
+<ul class="task-list">
+  {% for task in archived_tasks %}
+    <li class="task-row">
+      <div class="task-row-main">
+        #{{ task.id }} ({{ task.project_name }}) — {{ task.title }}
+        {% if task.archived_on %}<span class="task-meta">archived {{ task.archived_on }}</span>{% endif %}
+      </div>
+      <div class="task-row-actions">
+        <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
+          <input type="hidden" name="sort" value="{{ sort }}" />
+          <button type="submit">Restore</button>
+        </form>
+      </div>
+    </li>
+  {% else %}
+    <li>No archived tasks.</li>
+  {% endfor %}
+</ul>
 {% endblock %}

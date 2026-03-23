@@ -59,10 +59,14 @@ class TimeOnTask:
             """
             CREATE TABLE IF NOT EXISTS projects (
               id INT PRIMARY KEY AUTO_INCREMENT,
-              name VARCHAR(255) NOT NULL UNIQUE
+              name VARCHAR(255) NOT NULL UNIQUE,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0,
+              archived_on DATE NULL
             ) ENGINE=InnoDB
             """
         )
+        cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_on DATE NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS meetings (
@@ -89,6 +93,8 @@ class TimeOnTask:
               source_meeting_id INT NULL,
               occurrence_date DATE NULL,
               completed_on DATE NULL,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0,
+              archived_on DATE NULL,
               is_completed TINYINT(1) NOT NULL DEFAULT 0,
               FOREIGN KEY (project_id) REFERENCES projects(id),
               FOREIGN KEY (source_meeting_id) REFERENCES meetings(id)
@@ -101,6 +107,8 @@ class TimeOnTask:
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_meeting_id INT NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
         cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_on DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_on DATE NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS subtasks (
@@ -284,6 +292,37 @@ class TimeOnTask:
     def add_project(self, name: str) -> None:
         cur = self.conn.cursor()
         cur.execute("INSERT INTO projects (name) VALUES (%s)", (name.strip(),))
+        cur.close()
+        self.conn.commit()
+
+    def get_project(self, project_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, name, is_archived, archived_on FROM projects WHERE id = %s", (project_id,))
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def rename_project(self, project_id: int, name: str) -> None:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Project name is required.")
+        cur = self.conn.cursor()
+        cur.execute("UPDATE projects SET name = %s WHERE id = %s", (clean_name, project_id))
+        cur.close()
+        self.conn.commit()
+
+    def archive_project(self, project_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE projects SET is_archived = 1, archived_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), project_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def restore_project(self, project_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE projects SET is_archived = 0, archived_on = NULL WHERE id = %s", (project_id,))
         cur.close()
         self.conn.commit()
 
@@ -770,7 +809,8 @@ class TimeOnTask:
             SELECT COUNT(*) AS open_count
             FROM daily_selection ds
             JOIN tasks t ON t.id = ds.task_id
-            WHERE ds.day_date = %s AND t.is_completed = 0
+            JOIN projects p ON p.id = t.project_id
+            WHERE ds.day_date = %s AND t.is_completed = 0 AND t.is_archived = 0 AND p.is_archived = 0
             """,
             (today,),
         )
@@ -796,6 +836,21 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
+    def archive_task(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE tasks SET is_archived = 1, archived_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def restore_task(self, task_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE tasks SET is_archived = 0, archived_on = NULL WHERE id = %s", (task_id,))
+        cur.close()
+        self.conn.commit()
+
     def list_today(self, day: date | None = None) -> list[dict[str, Any]]:
         today = (day or date.today()).isoformat()
         cur = self.conn.cursor(dictionary=True)
@@ -805,7 +860,7 @@ class TimeOnTask:
             FROM daily_selection ds
             JOIN tasks t ON t.id = ds.task_id
             JOIN projects p ON p.id = t.project_id
-            WHERE ds.day_date = %s
+            WHERE ds.day_date = %s AND t.is_archived = 0 AND p.is_archived = 0
             ORDER BY ds.id
             """,
             (today,),
@@ -862,25 +917,31 @@ class TimeOnTask:
         cur.close()
         return rows
 
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(self, include_archived: bool = False) -> list[dict[str, Any]]:
         cur = self.conn.cursor(dictionary=True)
-        cur.execute("SELECT id, name FROM projects ORDER BY name")
+        if include_archived:
+            cur.execute("SELECT id, name, is_archived, archived_on FROM projects ORDER BY is_archived, name")
+        else:
+            cur.execute("SELECT id, name, is_archived, archived_on FROM projects WHERE is_archived = 0 ORDER BY name")
         rows = cur.fetchall()
         cur.close()
         return rows
 
 
-    def list_incomplete_tasks(self, sort_by: str = "created") -> list[dict[str, Any]]:
+    def list_incomplete_tasks(self, sort_by: str = "created", include_archived: bool = False) -> list[dict[str, Any]]:
         order_clause = "t.id"
         if sort_by == "project":
             order_clause = "p.name, t.title, t.id"
         cur = self.conn.cursor(dictionary=True)
+        where_clause = "WHERE t.is_completed = 0"
+        if not include_archived:
+            where_clause += " AND t.is_archived = 0 AND p.is_archived = 0"
         cur.execute(
             f"""
-            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_archived, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
-            WHERE t.is_completed = 0
+            {where_clause}
             ORDER BY {order_clause}
             """
         )
@@ -909,7 +970,7 @@ class TimeOnTask:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on FROM tasks WHERE id = %s",
+            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on FROM tasks WHERE id = %s",
             (task_id,),
         )
         row = cur.fetchone()
@@ -942,17 +1003,21 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
-    def list_tasks(self, sort_by: str = "created") -> list[dict[str, Any]]:
+    def list_tasks(self, sort_by: str = "created", include_archived: bool = False) -> list[dict[str, Any]]:
         order_clause = "t.id"
         if sort_by == "project":
             order_clause = "p.name, t.title, t.id"
 
         cur = self.conn.cursor(dictionary=True)
+        where_clause = ""
+        if not include_archived:
+            where_clause = "WHERE t.is_archived = 0 AND p.is_archived = 0"
         cur.execute(
             f"""
-            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, t.is_archived, t.archived_on, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
+            {where_clause}
             ORDER BY {order_clause}
             """
         )
