@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Today</h2>
+<p>Pick tasks for today. You can only have 2 active tasks at a time.</p>
+<h3>Today's meetings</h3>
+<ul>
+  {% for meeting in meetings %}
+    <li>
+      {{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}{% if meeting.project_name %} [{{ meeting.project_name }}]{% endif %}
+      <form class="inline" method="post" action="{{ url_for('create_task_from_meeting', meeting_id=meeting.id) }}">
+        <input type="hidden" name="next_view" value="today" />
+        {% if meeting.project_id %}
+        <input type="hidden" name="project_id" value="{{ meeting.project_id }}" />
+        {% else %}
+        <select name="project_id" required>
+          <option value="">Choose project</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <input type="hidden" name="title" value="Follow up: {{ meeting.title }}" />
+        <button type="submit">Create follow-up task</button>
+      </form>
+    </li>
+  {% else %}
+    <li>No meetings scheduled for today.</li>
+  {% endfor %}
+</ul>
+
+<form method="post">
+  <select name="task_id" required>
+      <option value="">Choose incomplete task</option>
+      {% for project_group in incomplete|groupby('project_name') %}
+      <optgroup label="{{ project_group.grouper }}">
+        {% for task in project_group.list %}
+        <option value="{{ task.id }}">{{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}{% if task.due_date %} (due {{ task.due_date }}){% endif %}{% if task.is_overdue %} — OVERDUE{% endif %}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+  </select>
+  <button type="submit">Select for Today</button>
+</form>
+<ul class="task-list task-list-spacious">
+  {% for row in today_rows %}
+    <li class="task-row {% if row.is_overdue %}task-overdue{% endif %}">
+      <div class="task-row-main">
+        <strong>{{ row.project_name }}</strong> — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}
+        {% if row.due_date %}
+          <span class="task-meta">due {{ row.due_date }}</span>
+        {% endif %}
+        {% if row.is_overdue %}
+          <span class="status-pill status-pill-danger">Overdue</span>
+        {% endif %}
+      </div>
+      <div class="task-row-actions">
+        {% if row.is_completed %}
+          <span class="status-pill status-pill-success">Completed</span>
+        {% else %}
+          <form method="post" action="{{ url_for('complete_task', task_id=row.id) }}">
+            <button type="submit">Mark Complete</button>
+          </form>
+        {% endif %}
+      </div>
+    </li>
+  {% else %}
+    <li>No selections today.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

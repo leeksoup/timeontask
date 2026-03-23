@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Projects</h2>
+<form method="post">
+  <input name="name" placeholder="Project name" required />
+  <button type="submit">Add Project</button>
+</form>
+
+<h3>Active Projects</h3>
+<ul>
+  {% for project in projects %}
+    <li class="task-row">
+      <div class="task-row-main">
+        <strong>#{{ project.id }}</strong> — {{ project.name }}
+      </div>
+      <div class="task-row-actions">
+        <form class="inline" method="post" action="{{ url_for('edit_project', project_id=project.id) }}">
+          <input name="name" value="{{ project.name }}" required />
+          <button type="submit">Rename</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('archive_project', project_id=project.id) }}">
+          <button type="submit">Archive</button>
+        </form>
+      </div>
+    </li>
+  {% else %}
+    <li>No projects yet.</li>
+  {% endfor %}
+</ul>
+
+<h3>Archived Projects</h3>
+<ul>
+  {% for project in archived_projects %}
+    <li class="task-row">
+      <div class="task-row-main">
+        <strong>#{{ project.id }}</strong> — {{ project.name }}
+        {% if project.archived_on %}<span class="task-meta">archived {{ project.archived_on }}</span>{% endif %}
+      </div>
+      <div class="task-row-actions">
+        <form class="inline" method="post" action="{{ url_for('restore_project', project_id=project.id) }}">
+          <button type="submit">Restore</button>
+        </form>
+      </div>
+    </li>
+  {% else %}
+    <li>No archived projects.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
