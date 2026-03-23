@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Weekly Goals ({{ week_start }})</h2>
+<form method="post">
+  <select name="task_id" required>
+    <option value="">Choose incomplete task</option>
+    {% for task in candidates %}
+      <option value="{{ task.id }}">{{ task.project_name }} — {{ task.title }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Add Goal</button>
+</form>
+<ul>
+  {% for goal in goals %}
+    <li>{{ goal.project_name }} — {{ goal.title }} {% if goal.is_completed %}✅{% else %}⏳{% endif %}</li>
+  {% else %}
+    <li>No goals set for this week.</li>
+  {% endfor %}
+</ul>
+{% endblock %}
