@@ -851,6 +851,35 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
+    def remove_today_task(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM daily_selection WHERE day_date = %s AND task_id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def snooze_task_to_next_week(self, task_id: int, day: date | None = None) -> str:
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError("Task not found.")
+        if bool(task["is_completed"]):
+            raise ValueError("Completed tasks cannot be snoozed.")
+        base_day = day or date.today()
+        next_week_start = date.fromisoformat(self.week_start(base_day)) + timedelta(days=7)
+        due_date_iso = next_week_start.isoformat()
+        self.update_task(
+            task_id,
+            int(task["project_id"]),
+            str(task["title"]),
+            False,
+            due_date=due_date_iso,
+            priority=task["priority"],
+        )
+        self.remove_today_task(task_id, day=base_day)
+        return due_date_iso
+
     def list_today(self, day: date | None = None) -> list[dict[str, Any]]:
         today = (day or date.today()).isoformat()
         cur = self.conn.cursor(dictionary=True)

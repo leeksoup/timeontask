@@ -131,6 +131,51 @@ def restore_project(project_id: int) -> str:
         tracker.close()
 
 
+@app.route("/projects/<int:project_id>", methods=["GET", "POST"])
+def project_dashboard(project_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        project = tracker.get_project(project_id)
+        if project is None:
+            flash("Project not found.")
+            return redirect(url_for("projects"))
+
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            due_date = request.form.get("due_date", "")
+            priority = request.form.get("priority", "")
+            if not title:
+                flash("Task title is required.")
+                return redirect(url_for("project_dashboard", project_id=project_id))
+            try:
+                tracker.add_task(project_id, title, due_date=due_date, priority=priority)
+                session["last_project_id"] = project_id
+                flash("Task created.")
+            except ValueError as exc:
+                flash(str(exc))
+            return redirect(url_for("project_dashboard", project_id=project_id))
+
+        tasks = [task for task in tracker.list_tasks(sort_by="created", include_archived=True) if task["project_id"] == project_id]
+        meetings = [meeting for meeting in tracker.list_meetings() if meeting["project_id"] == project_id]
+        goals = [goal for goal in tracker.list_week_goals() if goal["project_name"] == project["name"]]
+        active_tasks = [task for task in tasks if not task["is_archived"]]
+        archived_tasks = [task for task in tasks if task["is_archived"]]
+        today_iso = date.today().isoformat()
+        for task in active_tasks:
+            task["is_overdue"] = not bool(task["is_completed"]) and is_overdue(task.get("due_date"), today_iso=today_iso)
+
+        return render_template(
+            "project_dashboard.html",
+            project=project,
+            active_tasks=active_tasks,
+            archived_tasks=archived_tasks,
+            meetings=meetings,
+            goals=goals,
+        )
+    finally:
+        tracker.close()
+
+
 @app.route("/tasks", methods=["GET", "POST"])
 def tasks() -> str:
     tracker = TimeOnTask()
@@ -409,10 +454,13 @@ def archive_task(task_id: int) -> str:
     tracker = TimeOnTask()
     try:
         sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        project_id = request.form.get("project_id", "").strip()
         if sort not in {"created", "project"}:
             sort = "created"
         tracker.archive_task(task_id)
         flash("Task archived.")
+        if project_id:
+            return redirect(url_for("project_dashboard", project_id=int(project_id)))
         return redirect(url_for("tasks", sort=sort))
     finally:
         tracker.close()
@@ -423,11 +471,34 @@ def restore_task(task_id: int) -> str:
     tracker = TimeOnTask()
     try:
         sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        project_id = request.form.get("project_id", "").strip()
         if sort not in {"created", "project"}:
             sort = "created"
         tracker.restore_task(task_id)
         flash("Task restored.")
+        if project_id:
+            return redirect(url_for("project_dashboard", project_id=int(project_id)))
         return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/<int:task_id>/snooze")
+def snooze_task(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+        project_id = request.form.get("project_id", "").strip()
+        try:
+            due_date_iso = tracker.snooze_task_to_next_week(task_id)
+            flash(f"Task snoozed to {due_date_iso}.")
+        except ValueError as exc:
+            flash(str(exc))
+        if project_id:
+            return redirect(url_for("project_dashboard", project_id=int(project_id)))
+        return redirect(request.referrer or url_for("tasks", sort=sort))
     finally:
         tracker.close()
 

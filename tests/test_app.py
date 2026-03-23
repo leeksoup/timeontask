@@ -230,6 +230,11 @@ class FakeCursor:
             subtask_id = params[0]
             self.db["subtasks"] = [s for s in self.db["subtasks"] if s["id"] != subtask_id]
             return
+        if q.startswith("delete from daily_selection where day_date = %s and task_id = %s"):
+            self.db["daily_selection"] = [
+                row for row in self.db["daily_selection"] if not (row["day_date"] == params[0] and row["task_id"] == params[1])
+            ]
+            return
         if "from daily_selection ds join tasks" in q and "where ds.day_date" in q:
             today = params[0]
             out = []
@@ -438,14 +443,6 @@ class FakeCursor:
             task_id = params[0]
             out = [s for s in self.db["subtasks"] if s["task_id"] == task_id]
             out.sort(key=lambda s: (s["position"], s["id"]))
-            self.results = out
-            return
-        if q.startswith("select id, name from projects order by name"):
-            out = [
-                {"id": p["id"], "name": p["name"]}
-                for p in self.db["projects"]
-            ]
-            out.sort(key=lambda p: (p["name"], p["id"]))
             self.results = out
             return
         if "from tasks t join projects p on p.id = t.project_id" in q:
@@ -669,6 +666,20 @@ def test_tasks_can_be_archived_and_restored(tracker: TimeOnTask):
     restored = tracker.list_tasks()
     assert restored[0]["title"] == "Archive me"
     assert restored[0]["is_archived"] == 0
+
+
+def test_snooze_task_moves_due_date_to_next_week_and_removes_from_today(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Snooze me", due_date="2026-03-23")
+    tracker.select_today_task(1, day=date(2026, 3, 23))
+
+    new_due_date = tracker.snooze_task_to_next_week(1, day=date(2026, 3, 23))
+
+    task = tracker.get_task(1)
+    today_rows = tracker.list_today(day=date(2026, 3, 23))
+    assert new_due_date == "2026-03-30"
+    assert task["due_date"] == "2026-03-30"
+    assert today_rows == []
 
 
 def test_recurring_daily_generation_is_idempotent(tracker: TimeOnTask):
@@ -1027,3 +1038,17 @@ def test_tasks_view_and_edit_support_archive_and_restore(client):
     client.post("/tasks/1/restore", data={"sort": "created"})
     restored_page = client.get("/tasks").get_data(as_text=True)
     assert "Archive me" in restored_page
+
+
+def test_project_dashboard_and_snooze_flow(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks", data={"title": "Plan sprint", "project_id": "1", "due_date": "2026-03-23", "priority": ""})
+
+    dashboard_html = client.get("/projects/1").get_data(as_text=True)
+    assert "Project: Alpha" in dashboard_html
+    assert "Plan sprint" in dashboard_html
+
+    client.post("/tasks/1/snooze", data={"project_id": "1"}, follow_redirects=True)
+    updated_html = client.get("/projects/1").get_data(as_text=True)
+    assert "2026-03-30" in updated_html
+    assert "Snooze to Next Week" in updated_html

@@ -98,7 +98,7 @@
     {% for project_group in tasks|groupby('project_name') %}
       <section class="project-task-group">
       <div class="section-heading">
-        <h3>{{ project_group.grouper }}</h3>
+        <h3><a href="{{ url_for('project_dashboard', project_id=project_group.list[0].project_id) }}">{{ project_group.grouper }}</a></h3>
       </div>
       <form class="quick-add-form" method="post">
         <input type="hidden" name="sort" value="{{ sort }}" />
@@ -122,6 +122,11 @@
               {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
             </div>
             <div class="task-row-actions">
+              <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+                <input type="hidden" name="sort" value="{{ sort }}" />
+                <input type="hidden" name="project_id" value="{{ task.project_id }}" />
+                <button type="submit">Snooze to Next Week</button>
+              </form>
               {% if task.is_completed %}✅{% else %}⏳{% endif %}
               <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
             </div>
@@ -135,11 +140,16 @@
       {% for task in tasks %}
         <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
           <div class="task-row-main">
-            #{{ task.id }} ({{ task.project_name }}) — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
+            #{{ task.id }} (<a href="{{ url_for('project_dashboard', project_id=task.project_id) }}">{{ task.project_name }}</a>) — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
             {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
             {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
           </div>
           <div class="task-row-actions">
+            <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+              <input type="hidden" name="sort" value="{{ sort }}" />
+              <input type="hidden" name="project_id" value="{{ task.project_id }}" />
+              <button type="submit">Snooze to Next Week</button>
+            </form>
             {% if task.is_completed %}✅{% else %}⏳{% endif %}
             <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
           </div>
@@ -158,7 +168,7 @@
   {% for task in archived_tasks %}
     <li class="task-row">
       <div class="task-row-main">
-        #{{ task.id }} ({{ task.project_name }}) — {{ task.title }}
+        #{{ task.id }} (<a href="{{ url_for('project_dashboard', project_id=task.project_id) }}">{{ task.project_name }}</a>) — {{ task.title }}
         {% if task.archived_on %}<span class="task-meta">archived {{ task.archived_on }}</span>{% endif %}
       </div>
       <div class="task-row-actions">

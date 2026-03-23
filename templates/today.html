@@ -45,7 +45,7 @@
   {% for row in today_rows %}
     <li class="task-row {% if row.is_overdue %}task-overdue{% endif %}">
       <div class="task-row-main">
-        <strong>{{ row.project_name }}</strong> — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}
+        <strong><a href="{{ url_for('project_dashboard', project_id=row.project_id) }}">{{ row.project_name }}</a></strong> — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}
         {% if row.due_date %}
           <span class="task-meta">due {{ row.due_date }}</span>
         {% endif %}
@@ -57,6 +57,10 @@
         {% if row.is_completed %}
           <span class="status-pill status-pill-success">Completed</span>
         {% else %}
+          <form method="post" action="{{ url_for('snooze_task', task_id=row.id) }}">
+            <input type="hidden" name="project_id" value="{{ row.project_id }}" />
+            <button type="submit">Snooze to Next Week</button>
+          </form>
           <form method="post" action="{{ url_for('complete_task', task_id=row.id) }}">
             <button type="submit">Mark Complete</button>
           </form>

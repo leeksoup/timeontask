@@ -53,6 +53,11 @@
       <input type="hidden" name="sort" value="{{ sort }}" />
       <button type="submit">Archive Task</button>
     </form>
+    <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <input type="hidden" name="project_id" value="{{ task.project_id }}" />
+      <button type="submit">Snooze to Next Week</button>
+    </form>
   {% endif %}
 </section>
 
