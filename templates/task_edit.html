@@ -74,7 +74,8 @@
 {% if subtasks %}
 <ul>
   {% for subtask in subtasks %}
-  <li>
+  <li class="subtask-row" draggable="true" data-subtask-id="{{ subtask.id }}">
+    <span class="drag-handle" title="Drag to reorder">↕</span>
     <form method="post" action="{{ url_for('toggle_subtask', subtask_id=subtask.id) }}" style="display:inline-block; margin-right: 0.5rem;">
       <input type="hidden" name="task_id" value="{{ task.id }}" />
       <input type="hidden" name="sort" value="{{ sort }}" />
@@ -93,4 +94,38 @@
 {% else %}
 <p>No subtasks yet.</p>
 {% endif %}
+
+<form id="reorder-subtasks-form" method="post" action="{{ url_for('reorder_subtasks', task_id=task.id) }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <input type="hidden" id="ordered-ids" name="ordered_ids" value="" />
+  <button type="submit">Save Subtask Order</button>
+</form>
+
+<script>
+  (function () {
+    const list = document.querySelectorAll(".subtask-row");
+    const orderInput = document.getElementById("ordered-ids");
+    let dragged = null;
+    function syncOrder() {
+      const ids = Array.from(document.querySelectorAll(".subtask-row")).map((item) => item.dataset.subtaskId);
+      if (orderInput) orderInput.value = ids.join(",");
+    }
+    list.forEach((item) => {
+      item.addEventListener("dragstart", () => {
+        dragged = item;
+      });
+      item.addEventListener("dragover", (event) => {
+        event.preventDefault();
+      });
+      item.addEventListener("drop", (event) => {
+        event.preventDefault();
+        if (!dragged || dragged === item) return;
+        const parent = item.parentElement;
+        parent.insertBefore(dragged, item);
+        syncOrder();
+      });
+    });
+    syncOrder();
+  })();
+</script>
 {% endblock %}

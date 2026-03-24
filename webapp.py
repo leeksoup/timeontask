@@ -5,8 +5,9 @@ import os
 
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
-from timeontask import TimeOnTask
+from timeontask import TimeOnTask, load_dotenv
 
+load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "timeontask-dev"
 
@@ -89,7 +90,46 @@ def projects() -> str:
             "projects.html",
             projects=active_projects,
             archived_projects=archived_projects,
+            project_templates=tracker.list_project_templates(),
         )
+    finally:
+        tracker.close()
+
+
+@app.post("/project-templates")
+def add_project_template() -> str:
+    tracker = TimeOnTask()
+    try:
+        name = request.form.get("name", "").strip()
+        task_lines = request.form.get("task_lines", "")
+        task_specs = []
+        for line in task_lines.splitlines():
+            clean = line.strip()
+            if clean:
+                task_specs.append({"title": clean, "due_offset_days": None, "priority": None})
+        try:
+            tracker.add_project_template(name, task_specs)
+            flash("Project template created.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("projects"))
+    finally:
+        tracker.close()
+
+
+@app.post("/project-templates/<int:template_id>/instantiate")
+def instantiate_project_template(template_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        project_name = request.form.get("project_name", "").strip()
+        starts_on = request.form.get("starts_on", "")
+        try:
+            project_id = tracker.create_project_from_template(template_id, project_name, starts_on=starts_on or None)
+            flash("Project created from template.")
+            return redirect(url_for("project_dashboard", project_id=project_id))
+        except ValueError as exc:
+            flash(str(exc))
+            return redirect(url_for("projects"))
     finally:
         tracker.close()
 
@@ -394,6 +434,25 @@ def delete_subtask(subtask_id: int) -> str:
         if task_id:
             return redirect(url_for("edit_task", task_id=int(task_id), sort=sort))
         return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.post("/tasks/<int:task_id>/subtasks/reorder")
+def reorder_subtasks(task_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.form.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+        ordered_ids_raw = request.form.get("ordered_ids", "").strip()
+        try:
+            ordered_ids = [int(part) for part in ordered_ids_raw.split(",") if part.strip()]
+            tracker.reorder_subtasks(task_id, ordered_ids)
+            flash("Subtasks reordered.")
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for("edit_task", task_id=task_id, sort=sort))
     finally:
         tracker.close()
 

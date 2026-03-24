@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 import calendar
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
@@ -43,6 +45,22 @@ def create_mysql_connection() -> Any:
         database=os.getenv("MYSQL_DATABASE", "timeontask"),
         autocommit=False,
     )
+
+
+def load_dotenv(path: str = ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        clean_value = value.strip().strip("'\"")
+        os.environ.setdefault(key, clean_value)
 
 
 class TimeOnTask:
@@ -131,6 +149,29 @@ class TimeOnTask:
               priority TINYINT NULL,
               is_active TINYINT(1) NOT NULL DEFAULT 1,
               FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_templates (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              name VARCHAR(255) NOT NULL UNIQUE,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute("ALTER TABLE project_templates ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_template_tasks (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              template_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              due_offset_days INT NULL,
+              priority TINYINT NULL,
+              position INT NOT NULL,
+              FOREIGN KEY (template_id) REFERENCES project_templates(id) ON DELETE CASCADE
             ) ENGINE=InnoDB
             """
         )
@@ -325,6 +366,69 @@ class TimeOnTask:
         cur.execute("UPDATE projects SET is_archived = 0, archived_on = NULL WHERE id = %s", (project_id,))
         cur.close()
         self.conn.commit()
+
+    def add_project_template(self, name: str, task_specs: list[dict[str, Any]]) -> int:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Template name is required.")
+        cur = self.conn.cursor()
+        cur.execute("INSERT INTO project_templates (name, is_archived) VALUES (%s, 0)", (clean_name,))
+        template_id = cur.lastrowid
+        for position, spec in enumerate(task_specs, start=1):
+            title = str(spec["title"]).strip()
+            if not title:
+                raise ValueError("Template task title is required.")
+            due_offset_days = spec.get("due_offset_days")
+            if due_offset_days in {"", None}:
+                due_offset_days = None
+            elif isinstance(due_offset_days, str):
+                due_offset_days = int(due_offset_days.strip())
+            priority = self._normalize_priority(spec.get("priority"))
+            cur.execute(
+                """
+                INSERT INTO project_template_tasks (template_id, title, due_offset_days, priority, position)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (template_id, title, due_offset_days, priority, position),
+            )
+        cur.close()
+        self.conn.commit()
+        return template_id
+
+    def list_project_templates(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, name, is_archived FROM project_templates WHERE is_archived = 0 ORDER BY name")
+        rows = cur.fetchall()
+        for row in rows:
+            cur.execute(
+                """
+                SELECT id, template_id, title, due_offset_days, priority, position
+                FROM project_template_tasks
+                WHERE template_id = %s
+                ORDER BY position, id
+                """,
+                (row["id"],),
+            )
+            row["tasks"] = cur.fetchall()
+        cur.close()
+        return rows
+
+    def create_project_from_template(self, template_id: int, project_name: str, starts_on: str | None = None) -> int:
+        clean_project_name = project_name.strip()
+        if not clean_project_name:
+            raise ValueError("Project name is required.")
+        start_day = date.fromisoformat(self._normalize_due_date(starts_on) or date.today().isoformat())
+        templates = {template["id"]: template for template in self.list_project_templates()}
+        template = templates.get(template_id)
+        if template is None:
+            raise ValueError("Project template not found.")
+        self.add_project(clean_project_name)
+        project_id = max(int(project["id"]) for project in self.list_projects(include_archived=True))
+        for task_spec in template["tasks"]:
+            offset = task_spec.get("due_offset_days")
+            due_date = None if offset is None else (start_day + timedelta(days=int(offset))).isoformat()
+            self.add_task(project_id, str(task_spec["title"]), due_date=due_date, priority=task_spec.get("priority"))
+        return project_id
 
     def add_task(
         self,
@@ -732,6 +836,18 @@ class TimeOnTask:
         cur.close()
         return rows
 
+    def reorder_subtasks(self, task_id: int, ordered_ids: list[int]) -> None:
+        existing = self.list_subtasks(task_id)
+        existing_ids = {int(subtask["id"]) for subtask in existing}
+        ordered_set = list(dict.fromkeys(ordered_ids))
+        if set(ordered_set) != existing_ids:
+            raise ValueError("Reorder list must include each subtask exactly once.")
+        cur = self.conn.cursor()
+        for position, subtask_id in enumerate(ordered_set, start=1):
+            cur.execute("UPDATE subtasks SET position = %s WHERE id = %s", (position, subtask_id))
+        cur.close()
+        self.conn.commit()
+
     def set_subtask_completed(self, subtask_id: int, is_completed: bool) -> None:
         cur = self.conn.cursor()
         cur.execute("UPDATE subtasks SET is_completed = %s WHERE id = %s", (int(is_completed), subtask_id))
@@ -743,6 +859,52 @@ class TimeOnTask:
         cur.execute("DELETE FROM subtasks WHERE id = %s", (subtask_id,))
         cur.close()
         self.conn.commit()
+
+    def export_data(self) -> dict[str, Any]:
+        if hasattr(self.conn, "db"):
+            return json.loads(json.dumps(self.conn.db))
+        table_names = [
+            "projects",
+            "project_templates",
+            "project_template_tasks",
+            "tasks",
+            "weekly_goals",
+            "daily_selection",
+            "task_templates",
+            "task_recurrence_rules",
+            "task_recurrence_weekdays",
+            "task_recurrence_month_days",
+            "task_recurrence_year_days",
+            "subtasks",
+            "meetings",
+        ]
+        cur = self.conn.cursor(dictionary=True)
+        data: dict[str, Any] = {}
+        for table in table_names:
+            cur.execute(f"SELECT * FROM {table}")
+            data[table] = cur.fetchall()
+        cur.close()
+        return data
+
+    def export_to_file(self, path: str) -> str:
+        export_path = Path(path)
+        export_path.write_text(json.dumps(self.export_data(), indent=2, sort_keys=True))
+        return str(export_path)
+
+    def import_data(self, data: dict[str, Any]) -> None:
+        if hasattr(self.conn, "db"):
+            self.conn.db.clear()
+            self.conn.db.update(json.loads(json.dumps(data)))
+            return
+        raise NotImplementedError("Import is only supported for the in-memory test harness in this environment.")
+
+    def import_from_file(self, path: str) -> None:
+        payload = json.loads(Path(path).read_text())
+        self.import_data(payload)
+
+    def backup_to_file(self, path: str | None = None) -> str:
+        backup_path = Path(path or f"timeontask-backup-{date.today().isoformat()}.json")
+        return self.export_to_file(str(backup_path))
 
     def set_week_goal(self, task_id: int, day: date | None = None) -> None:
         cur = self.conn.cursor()
@@ -1062,6 +1224,7 @@ def print_rows(rows: Iterable[dict[str, Any]]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Time on Task CLI (MariaDB/MySQL)")
+    parser.add_argument("--env-file", default=".env")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("add-project")
@@ -1087,12 +1250,31 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("week-review")
     sub.add_parser("projects")
     sub.add_parser("tasks")
+
+    template = sub.add_parser("add-project-template")
+    template.add_argument("name")
+    template.add_argument("task_titles", nargs="+")
+
+    instantiate = sub.add_parser("create-project-from-template")
+    instantiate.add_argument("template_id", type=int)
+    instantiate.add_argument("project_name")
+    instantiate.add_argument("--starts-on")
+
+    export_cmd = sub.add_parser("export-json")
+    export_cmd.add_argument("path")
+
+    import_cmd = sub.add_parser("import-json")
+    import_cmd.add_argument("path")
+
+    backup_cmd = sub.add_parser("backup-json")
+    backup_cmd.add_argument("--path")
     return parser
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    load_dotenv(args.env_file)
     app = TimeOnTask()
 
     try:
@@ -1123,6 +1305,22 @@ def main() -> None:
             print_rows(app.list_projects())
         elif args.command == "tasks":
             print_rows(app.list_tasks())
+        elif args.command == "add-project-template":
+            template_id = app.add_project_template(
+                args.name,
+                [{"title": title, "due_offset_days": None, "priority": None} for title in args.task_titles],
+            )
+            print(f"Project template created: {template_id}")
+        elif args.command == "create-project-from-template":
+            project_id = app.create_project_from_template(args.template_id, args.project_name, starts_on=args.starts_on)
+            print(f"Project created from template: {project_id}")
+        elif args.command == "export-json":
+            print(app.export_to_file(args.path))
+        elif args.command == "import-json":
+            app.import_from_file(args.path)
+            print("Import complete")
+        elif args.command == "backup-json":
+            print(app.backup_to_file(args.path))
     finally:
         app.close()
 

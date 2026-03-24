@@ -26,3 +26,6 @@ ul { list-style: none; padding-left: 0.8rem; }
 .quick-add-form { margin: 0 0 0.75rem; }
 .project-task-group { margin-bottom: 1rem; }
 button, select, input { min-height: 2.2rem; }
+textarea { width: 100%; min-height: 6rem; }
+.subtask-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.drag-handle { cursor: grab; font-weight: bold; color: #51607a; }

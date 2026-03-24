@@ -6,6 +6,30 @@
   <button type="submit">Add Project</button>
 </form>
 
+<h3>Project Templates</h3>
+<form method="post" action="{{ url_for('add_project_template') }}">
+  <input name="name" placeholder="Template name" required />
+  <textarea name="task_lines" placeholder="One task title per line" rows="4" required></textarea>
+  <button type="submit">Save Template</button>
+</form>
+<ul>
+  {% for template in project_templates %}
+    <li>
+      <strong>{{ template.name }}</strong>
+      {% if template.tasks %}
+        <span class="task-meta">{{ template.tasks|length }} starter task(s)</span>
+      {% endif %}
+      <form class="inline" method="post" action="{{ url_for('instantiate_project_template', template_id=template.id) }}">
+        <input name="project_name" placeholder="New project name" required />
+        <input name="starts_on" type="date" />
+        <button type="submit">Create Project</button>
+      </form>
+    </li>
+  {% else %}
+    <li>No project templates yet.</li>
+  {% endfor %}
+</ul>
+
 <h3>Active Projects</h3>
 <ul>
   {% for project in projects %}

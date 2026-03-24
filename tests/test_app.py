@@ -1,9 +1,11 @@
 from datetime import date
+import json
+import os
 from pathlib import Path
 
 import pytest
 
-from timeontask import TimeOnTask
+from timeontask import TimeOnTask, load_dotenv
 
 
 class FakeCursor:
@@ -23,6 +25,7 @@ class FakeCursor:
             q.startswith("alter table tasks add column")
             or q.startswith("alter table weekly_goals add column")
             or q.startswith("alter table projects add column")
+            or q.startswith("alter table project_templates add column")
         ):
             return
         if q.startswith("insert into projects"):
@@ -93,6 +96,25 @@ class FakeCursor:
             }
             if not any(existing["week_start"] == row["week_start"] and existing["task_id"] == row["task_id"] for existing in self.db["weekly_goals"]):
                 self.db["weekly_goals"].append(row)
+            return
+        if q.startswith("insert into project_templates"):
+            self.db["project_templates"].append(
+                {"id": len(self.db["project_templates"]) + 1, "name": params[0], "is_archived": 0}
+            )
+            self.lastrowid = len(self.db["project_templates"])
+            return
+        if q.startswith("insert into project_template_tasks"):
+            self.db["project_template_tasks"].append(
+                {
+                    "id": len(self.db["project_template_tasks"]) + 1,
+                    "template_id": params[0],
+                    "title": params[1],
+                    "due_offset_days": params[2],
+                    "priority": params[3],
+                    "position": params[4],
+                }
+            )
+            self.lastrowid = len(self.db["project_template_tasks"])
             return
         if q.startswith("insert into task_templates"):
             self.db["task_templates"].append(
@@ -213,6 +235,11 @@ class FakeCursor:
                 if subtask["id"] == params[1]:
                     subtask["is_completed"] = params[0]
             return
+        if q.startswith("update subtasks set position = %s where id = %s"):
+            for subtask in self.db["subtasks"]:
+                if subtask["id"] == params[1]:
+                    subtask["position"] = params[0]
+            return
         if q.startswith("update weekly_goals set review_outcome = %s, review_note = %s where id = %s"):
             for goal in self.db["weekly_goals"]:
                 if goal["id"] == params[2]:
@@ -308,6 +335,17 @@ class FakeCursor:
             goal_id = params[0]
             goal = next((g for g in self.db["weekly_goals"] if g["id"] == goal_id), None)
             self.results = [goal] if goal else []
+            return
+        if q.startswith("select id, name, is_archived from project_templates where is_archived = 0 order by name"):
+            out = [tpl for tpl in self.db["project_templates"] if tpl["is_archived"] == 0]
+            out.sort(key=lambda tpl: tpl["name"])
+            self.results = out
+            return
+        if q.startswith("select id, template_id, title, due_offset_days, priority, position from project_template_tasks where template_id = %s"):
+            template_id = params[0]
+            out = [task for task in self.db["project_template_tasks"] if task["template_id"] == template_id]
+            out.sort(key=lambda task: (task["position"], task["id"]))
+            self.results = out
             return
         if "from task_recurrence_rules r join task_templates t" in q:
             out = []
@@ -477,6 +515,10 @@ class FakeCursor:
                 out.sort(key=lambda t: t["id"])
             self.results = out
             return
+        if q.startswith("select * from "):
+            table_name = q.split("select * from ", 1)[1]
+            self.results = list(self.db[table_name])
+            return
         raise AssertionError(f"Unhandled query: {query}")
 
     def fetchone(self):
@@ -497,6 +539,8 @@ class FakeConnection:
             "weekly_goals": [],
             "daily_selection": [],
             "task_templates": [],
+            "project_templates": [],
+            "project_template_tasks": [],
             "task_recurrence_rules": [],
             "task_recurrence_weekdays": [],
             "task_recurrence_month_days": [],
@@ -680,6 +724,71 @@ def test_snooze_task_moves_due_date_to_next_week_and_removes_from_today(tracker:
     assert new_due_date == "2026-03-30"
     assert task["due_date"] == "2026-03-30"
     assert today_rows == []
+
+
+def test_subtasks_can_be_reordered(tracker: TimeOnTask):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Parent")
+    tracker.add_subtask(1, "First")
+    tracker.add_subtask(1, "Second")
+    tracker.add_subtask(1, "Third")
+
+    subtasks = tracker.list_subtasks(1)
+    tracker.reorder_subtasks(1, [subtasks[2]["id"], subtasks[0]["id"], subtasks[1]["id"]])
+
+    reordered = tracker.list_subtasks(1)
+    assert [subtask["title"] for subtask in reordered] == ["Third", "First", "Second"]
+    assert [subtask["position"] for subtask in reordered] == [1, 2, 3]
+
+
+def test_project_templates_can_create_projects(tracker: TimeOnTask):
+    template_id = tracker.add_project_template(
+        "Client Launch",
+        [
+            {"title": "Kickoff", "due_offset_days": 0, "priority": 1},
+            {"title": "Recap", "due_offset_days": 7, "priority": 2},
+        ],
+    )
+
+    project_id = tracker.create_project_from_template(template_id, "Client A", starts_on="2026-03-24")
+
+    project = tracker.get_project(project_id)
+    tasks = [task for task in tracker.list_tasks() if task["project_id"] == project_id]
+    assert project is not None
+    assert project["name"] == "Client A"
+    assert [task["title"] for task in tasks] == ["Kickoff", "Recap"]
+    assert [task["due_date"] for task in tasks] == ["2026-03-24", "2026-03-31"]
+
+
+def test_export_import_and_backup_helpers_round_trip(tracker: TimeOnTask, tmp_path: Path):
+    tracker.add_project("Project A")
+    tracker.add_task(1, "Task 1")
+    export_path = tmp_path / "export.json"
+    backup_path = tmp_path / "backup.json"
+
+    tracker.export_to_file(str(export_path))
+    payload = json.loads(export_path.read_text())
+    assert payload["projects"][0]["name"] == "Project A"
+
+    fresh = TimeOnTask(connection_factory=FakeConnection)
+    fresh.import_from_file(str(export_path))
+    assert fresh.list_projects()[0]["name"] == "Project A"
+    assert fresh.list_tasks()[0]["title"] == "Task 1"
+    written_backup = fresh.backup_to_file(str(backup_path))
+    assert Path(written_backup).exists()
+    fresh.close()
+
+
+def test_load_dotenv_sets_missing_values_only(tmp_path: Path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("MYSQL_HOST=dotenv-host\nCUSTOM_FLAG=yes\n")
+    monkeypatch.delenv("CUSTOM_FLAG", raising=False)
+    monkeypatch.setenv("MYSQL_HOST", "already-set")
+
+    load_dotenv(str(env_path))
+
+    assert os.environ["MYSQL_HOST"] == "already-set"
+    assert os.environ["CUSTOM_FLAG"] == "yes"
 
 
 def test_recurring_daily_generation_is_idempotent(tracker: TimeOnTask):
@@ -1052,3 +1161,21 @@ def test_project_dashboard_and_snooze_flow(client):
     updated_html = client.get("/projects/1").get_data(as_text=True)
     assert "2026-03-30" in updated_html
     assert "Snooze to Next Week" in updated_html
+
+
+def test_projects_view_can_create_project_from_template(client):
+    client.post("/project-templates", data={"name": "Starter", "task_lines": "Task A\nTask B"}, follow_redirects=True)
+
+    projects_page = client.get("/projects").get_data(as_text=True)
+    assert "Starter" in projects_page
+    assert "Create Project" in projects_page
+
+    response = client.post(
+        "/project-templates/1/instantiate",
+        data={"project_name": "Template Project", "starts_on": "2026-03-24"},
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+    assert "Project: Template Project" in html
+    assert "Task A" in html
+    assert "Task B" in html
