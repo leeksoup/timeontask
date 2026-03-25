@@ -186,6 +186,15 @@ class FakeCursor:
                 }
             )
             return
+        if q.startswith("update meetings set project_id = %s, title = %s, weekday = %s, start_time = %s, duration_minutes = %s where id = %s"):
+            for meeting in self.db["meetings"]:
+                if meeting["id"] == params[5]:
+                    meeting["project_id"] = params[0]
+                    meeting["title"] = params[1]
+                    meeting["weekday"] = params[2]
+                    meeting["start_time"] = params[3]
+                    meeting["duration_minutes"] = params[4]
+            return
         if "select count(*) as open_count" in q:
             today = params[0]
             open_count = 0
@@ -1179,3 +1188,61 @@ def test_projects_view_can_create_project_from_template(client):
     assert "Project: Template Project" in html
     assert "Task A" in html
     assert "Task B" in html
+
+
+def test_recurring_tasks_show_in_tasks_today_and_project_dashboard(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post(
+        "/tasks/recurring",
+        data={
+            "title": "Daily recurring",
+            "project_id": "1",
+            "freq": "DAILY",
+            "interval_n": "1",
+            "starts_on": "2026-03-01",
+            "ends_on": "",
+            "weekdays": "",
+            "month_days": "",
+            "year_dates": "",
+            "due_date": "2026-03-25",
+            "priority": "2",
+            "sort": "project",
+        },
+        follow_redirects=True,
+    )
+
+    tasks_html = client.get("/tasks?sort=project").get_data(as_text=True)
+    today_html = client.get("/today").get_data(as_text=True)
+    project_html = client.get("/projects/1").get_data(as_text=True)
+
+    assert "Daily recurring" in tasks_html
+    assert "Daily recurring" in today_html
+    assert "Daily recurring" in project_html
+
+
+def test_meetings_can_be_edited_from_meetings_page(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post(
+        "/meetings",
+        data={
+            "title": "Weekly Sync",
+            "project_id": "1",
+            "weekday": "2",
+            "start_time": "09:00",
+            "duration_minutes": "30",
+        },
+    )
+    response = client.post(
+        "/meetings/1/edit",
+        data={
+            "title": "Team Sync",
+            "project_id": "1",
+            "weekday": "3",
+            "start_time": "10:15",
+            "duration_minutes": "45",
+        },
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+    assert "Meeting updated." in html
+    assert "Team Sync" in html

@@ -725,6 +725,46 @@ class TimeOnTask:
         cur.close()
         self.conn.commit()
 
+    def update_meeting(
+        self,
+        meeting_id: int,
+        title: str,
+        weekday: int,
+        start_time: str,
+        duration_minutes: int,
+        project_id: int | None = None,
+    ) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Meeting title is required.")
+        if weekday < 0 or weekday > 6:
+            raise ValueError("Weekday must be between 0 (Mon) and 6 (Sun).")
+        if duration_minutes < 1:
+            raise ValueError("Duration must be at least 1 minute.")
+        try:
+            parts = start_time.strip().split(":")
+            if len(parts) != 2:
+                raise ValueError
+            hh = int(parts[0])
+            mm = int(parts[1])
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                raise ValueError
+            start_time_clean = f"{hh:02d}:{mm:02d}:00"
+        except ValueError as exc:
+            raise ValueError("Start time must be HH:MM (24-hour).") from exc
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE meetings
+            SET project_id = %s, title = %s, weekday = %s, start_time = %s, duration_minutes = %s
+            WHERE id = %s
+            """,
+            (project_id, clean_title, weekday, start_time_clean, duration_minutes, meeting_id),
+        )
+        cur.close()
+        self.conn.commit()
+
     def get_meeting(self, meeting_id: int) -> dict[str, Any] | None:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(

@@ -127,7 +127,14 @@
                 <input type="hidden" name="project_id" value="{{ task.project_id }}" />
                 <button type="submit">Snooze to Next Week</button>
               </form>
-              {% if task.is_completed %}✅{% else %}⏳{% endif %}
+              {% if task.is_completed %}
+                ✅
+              {% else %}
+                <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+                  <button type="submit">Mark Complete</button>
+                </form>
+                ⏳
+              {% endif %}
               <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
             </div>
           </li>
@@ -150,7 +157,14 @@
               <input type="hidden" name="project_id" value="{{ task.project_id }}" />
               <button type="submit">Snooze to Next Week</button>
             </form>
-            {% if task.is_completed %}✅{% else %}⏳{% endif %}
+            {% if task.is_completed %}
+              ✅
+            {% else %}
+              <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+                <button type="submit">Mark Complete</button>
+              </form>
+              ⏳
+            {% endif %}
             <a href="{{ url_for('edit_task', task_id=task.id, sort=sort) }}">Edit</a>
           </div>
         </li>

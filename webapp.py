@@ -51,6 +51,7 @@ def is_overdue(due_date: object, *, today_iso: str | None = None) -> bool:
 def dashboard() -> str:
     tracker = TimeOnTask()
     try:
+        tracker.generate_recurring_tasks(horizon_days=14)
         projects = tracker.list_projects()
         tasks = tracker.list_tasks()
         today_rows = tracker.list_today()
@@ -175,6 +176,7 @@ def restore_project(project_id: int) -> str:
 def project_dashboard(project_id: int) -> str:
     tracker = TimeOnTask()
     try:
+        tracker.generate_recurring_tasks(horizon_days=14)
         project = tracker.get_project(project_id)
         if project is None:
             flash("Project not found.")
@@ -198,16 +200,20 @@ def project_dashboard(project_id: int) -> str:
         tasks = [task for task in tracker.list_tasks(sort_by="created", include_archived=True) if task["project_id"] == project_id]
         meetings = [meeting for meeting in tracker.list_meetings() if meeting["project_id"] == project_id]
         goals = [goal for goal in tracker.list_week_goals() if goal["project_name"] == project["name"]]
-        active_tasks = [task for task in tasks if not task["is_archived"]]
+        active_tasks = [task for task in tasks if not task["is_archived"] and not bool(task["is_completed"])]
+        completed_tasks = [task for task in tasks if not task["is_archived"] and bool(task["is_completed"])]
         archived_tasks = [task for task in tasks if task["is_archived"]]
         today_iso = date.today().isoformat()
         for task in active_tasks:
             task["is_overdue"] = not bool(task["is_completed"]) and is_overdue(task.get("due_date"), today_iso=today_iso)
+        for task in completed_tasks:
+            task["is_overdue"] = False
 
         return render_template(
             "project_dashboard.html",
             project=project,
             active_tasks=active_tasks,
+            completed_tasks=completed_tasks,
             archived_tasks=archived_tasks,
             meetings=meetings,
             goals=goals,
@@ -224,7 +230,7 @@ def tasks() -> str:
         if sort not in {"created", "project"}:
             sort = "created"
         session["tasks_sort"] = sort
-        tracker.generate_recurring_tasks()
+        tracker.generate_recurring_tasks(horizon_days=14)
 
         if request.method == "POST":
             title = request.form.get("title", "").strip()
@@ -607,6 +613,43 @@ def meetings() -> str:
         tracker.close()
 
 
+@app.route("/meetings/<int:meeting_id>/edit", methods=["GET", "POST"])
+def edit_meeting(meeting_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        meeting = tracker.get_meeting(meeting_id)
+        if meeting is None:
+            flash("Meeting not found.")
+            return redirect(url_for("meetings"))
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            weekday = request.form.get("weekday", "").strip()
+            start_time = request.form.get("start_time", "").strip()
+            duration = request.form.get("duration_minutes", "").strip()
+            project_id = request.form.get("project_id", "").strip()
+            try:
+                tracker.update_meeting(
+                    meeting_id,
+                    title=title,
+                    weekday=int(weekday),
+                    start_time=start_time,
+                    duration_minutes=int(duration),
+                    project_id=int(project_id) if project_id else None,
+                )
+                flash("Meeting updated.")
+                return redirect(url_for("meetings"))
+            except ValueError as exc:
+                flash(str(exc))
+        return render_template(
+            "meeting_edit.html",
+            meeting=meeting,
+            projects=tracker.list_projects(),
+            weekday_choices=[(idx, weekday_name(idx)) for idx in range(7)],
+        )
+    finally:
+        tracker.close()
+
+
 @app.post("/meetings/<int:meeting_id>/task")
 def create_task_from_meeting(meeting_id: int) -> str:
     tracker = TimeOnTask()
@@ -666,7 +709,7 @@ def weekly_goals() -> str:
 def today() -> str:
     tracker = TimeOnTask()
     try:
-        tracker.generate_recurring_tasks()
+        tracker.generate_recurring_tasks(horizon_days=14)
         if request.method == "POST":
             task_id = request.form.get("task_id", "").strip()
             if task_id:

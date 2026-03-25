@@ -7,6 +7,7 @@
 
 <div class="grid">
   <section><h3>Active Tasks</h3><p>{{ active_tasks|length }}</p></section>
+  <section><h3>Completed Tasks</h3><p>{{ completed_tasks|length }}</p></section>
   <section><h3>Archived Tasks</h3><p>{{ archived_tasks|length }}</p></section>
   <section><h3>This Week's Goals</h3><p>{{ goals|length }}</p></section>
   <section><h3>Meetings</h3><p>{{ meetings|length }}</p></section>
@@ -44,6 +45,23 @@
     </li>
   {% else %}
     <li>No active tasks for this project.</li>
+  {% endfor %}
+</ul>
+
+<h3>Completed Tasks</h3>
+<ul class="task-list">
+  {% for task in completed_tasks %}
+    <li class="task-row">
+      <div class="task-row-main">
+        #{{ task.id }} — {{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}
+        <span class="status-pill status-pill-success">Completed</span>
+      </div>
+      <div class="task-row-actions">
+        <a href="{{ url_for('edit_task', task_id=task.id, sort='project') }}">Edit</a>
+      </div>
+    </li>
+  {% else %}
+    <li>No completed tasks for this project.</li>
   {% endfor %}
 </ul>
 
