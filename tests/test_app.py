@@ -434,8 +434,11 @@ class FakeCursor:
                 out.append(
                     {
                         "id": template["id"],
+                        "rule_id": rule["id"],
                         "title": template["title"],
                         "project_id": template["project_id"],
+                        "due_date": template["due_date"],
+                        "priority": template["priority"],
                         "project_name": project["name"],
                         "freq": rule["freq"],
                         "interval_n": rule["interval_n"],
