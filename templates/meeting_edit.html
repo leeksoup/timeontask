@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Edit Meeting</h2>
+<form method="post">
+  <label>
+    Title
+    <input name="title" value="{{ meeting.title }}" required />
+  </label>
+
+  <label>
+    Project (optional)
+    <select name="project_id">
+      <option value="">No project</option>
+      {% for project in projects %}
+      <option value="{{ project.id }}" {% if meeting.project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Weekday
+    <select name="weekday" required>
+      {% for value, label in weekday_choices %}
+      <option value="{{ value }}" {% if meeting.weekday == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Start time
+    <input type="time" name="start_time" value="{{ meeting.start_time[:5] }}" required />
+  </label>
+
+  <label>
+    Duration (minutes)
+    <input type="number" name="duration_minutes" min="1" value="{{ meeting.duration_minutes }}" required />
+  </label>
+
+  <button type="submit">Save Meeting</button>
+  <a href="{{ url_for('meetings') }}">Cancel</a>
+</form>
+{% endblock %}
