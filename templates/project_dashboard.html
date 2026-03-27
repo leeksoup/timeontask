@@ -31,7 +31,7 @@
   {% for task in active_tasks %}
     <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
       <div class="task-row-main">
-        #{{ task.id }} — {{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}
+        #{{ task.id }} — {{ task.title }}{% if task.occurrence_date %} on {{ task.occurrence_date }}{% endif %}{% if task.priority %} [P{{ task.priority }}]{% endif %}
         {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
         {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
       </div>
@@ -53,7 +53,7 @@
   {% for task in completed_tasks %}
     <li class="task-row">
       <div class="task-row-main">
-        #{{ task.id }} — {{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}
+        #{{ task.id }} — {{ task.title }}{% if task.occurrence_date %} on {{ task.occurrence_date }}{% endif %}{% if task.priority %} [P{{ task.priority }}]{% endif %}
         <span class="status-pill status-pill-success">Completed</span>
       </div>
       <div class="task-row-actions">

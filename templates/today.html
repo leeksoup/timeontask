@@ -34,7 +34,7 @@
       {% for project_group in incomplete|groupby('project_name') %}
       <optgroup label="{{ project_group.grouper }}">
         {% for task in project_group.list %}
-        <option value="{{ task.id }}">{{ task.title }}{% if task.priority %} [P{{ task.priority }}]{% endif %}{% if task.due_date %} (due {{ task.due_date }}){% endif %}{% if task.is_overdue %} — OVERDUE{% endif %}</option>
+        <option value="{{ task.id }}">{{ task.title }}{% if task.occurrence_date %} on {{ task.occurrence_date }}{% endif %}{% if task.priority %} [P{{ task.priority }}]{% endif %}{% if task.due_date %} (due {{ task.due_date }}){% endif %}{% if task.is_overdue %} — OVERDUE{% endif %}</option>
         {% endfor %}
       </optgroup>
       {% endfor %}
@@ -45,7 +45,7 @@
   {% for row in today_rows %}
     <li class="task-row {% if row.is_overdue %}task-overdue{% endif %}">
       <div class="task-row-main">
-        <strong><a href="{{ url_for('project_dashboard', project_id=row.project_id) }}">{{ row.project_name }}</a></strong> — {{ row.title }}{% if row.priority %} [P{{ row.priority }}]{% endif %}
+        <strong><a href="{{ url_for('project_dashboard', project_id=row.project_id) }}">{{ row.project_name }}</a></strong> — {{ row.title }}{% if row.occurrence_date %} on {{ row.occurrence_date }}{% endif %}{% if row.priority %} [P{{ row.priority }}]{% endif %}
         {% if row.due_date %}
           <span class="task-meta">due {{ row.due_date }}</span>
         {% endif %}

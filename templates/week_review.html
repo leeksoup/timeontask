@@ -4,8 +4,9 @@
 
 <div class="grid">
   <section><h3>Total Goals</h3><p>{{ summary.total }}</p></section>
-  <section><h3>Completed</h3><p>{{ summary.completed }}</p></section>
+  <section><h3>Completed Goals</h3><p>{{ summary.completed }}</p><small>Weekly goals completed.</small></section>
   <section><h3>Completed Tasks This Week</h3><p>{{ summary.completed_tasks }}</p></section>
+  <section><small>All tasks completed this week.</small></section>
   <section><h3>Deferred</h3><p>{{ summary.deferred }}</p></section>
   <section><h3>Blocked</h3><p>{{ summary.blocked }}</p></section>
   <section><h3>Carried Forward</h3><p>{{ summary.carried_forward }}</p></section>
@@ -32,7 +33,7 @@
 </ul>
 
 {% for bucket, label in [
-  ("completed", "Completed"),
+  ("completed", "Completed Goals"),
   ("deferred", "Deferred"),
   ("blocked", "Blocked"),
   ("carried_forward", "Carried Forward"),

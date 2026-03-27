@@ -687,6 +687,103 @@ class TimeOnTask:
         cur.close()
         return rows
 
+    def get_recurring_template(self, template_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, r.id AS rule_id, r.freq, r.interval_n, r.starts_on, r.ends_on
+            FROM task_templates t
+            JOIN task_recurrence_rules r ON r.template_id = t.id
+            WHERE t.id = %s AND t.is_active = 1
+            """,
+            (template_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.close()
+            return None
+
+        cur.execute("SELECT weekday FROM task_recurrence_weekdays WHERE rule_id = %s ORDER BY weekday", (row["rule_id"],))
+        row["weekdays"] = [int(r["weekday"]) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT day_of_month FROM task_recurrence_month_days WHERE rule_id = %s ORDER BY day_of_month",
+            (row["rule_id"],),
+        )
+        row["month_days"] = [int(r["day_of_month"]) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT month_num, day_of_month FROM task_recurrence_year_days WHERE rule_id = %s ORDER BY month_num, day_of_month",
+            (row["rule_id"],),
+        )
+        row["year_dates"] = [f"{int(r['month_num']):02d}-{int(r['day_of_month']):02d}" for r in cur.fetchall()]
+        cur.close()
+        return row
+
+    def update_recurring_template(
+        self,
+        template_id: int,
+        project_id: int,
+        title: str,
+        freq: str,
+        interval_n: int = 1,
+        starts_on: str | None = None,
+        ends_on: str | None = None,
+        weekdays_csv: str | None = None,
+        month_days_csv: str | None = None,
+        year_dates_csv: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        existing = self.get_recurring_template(template_id)
+        if existing is None:
+            raise ValueError("Recurring template not found.")
+        freq_clean = freq.strip().upper()
+        if freq_clean not in {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}:
+            raise ValueError("Frequency must be daily, weekly, monthly, or yearly.")
+        if interval_n < 1:
+            raise ValueError("Interval must be at least 1.")
+        starts_on_iso = self._normalize_due_date(starts_on) or date.today().isoformat()
+        ends_on_iso = self._normalize_due_date(ends_on)
+        if ends_on_iso is not None and ends_on_iso < starts_on_iso:
+            raise ValueError("End date must be on or after the start date.")
+
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+        weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
+        month_days = self._parse_csv_ints(month_days_csv, 1, 31)
+        year_dates = self._parse_year_dates(year_dates_csv)
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE task_templates SET project_id = %s, title = %s, due_date = %s, priority = %s WHERE id = %s",
+                (project_id, title.strip(), due_date_iso, priority_val, template_id),
+            )
+            cur.execute(
+                "UPDATE task_recurrence_rules SET freq = %s, interval_n = %s, starts_on = %s, ends_on = %s WHERE id = %s",
+                (freq_clean, interval_n, starts_on_iso, ends_on_iso, existing["rule_id"]),
+            )
+            cur.execute("DELETE FROM task_recurrence_weekdays WHERE rule_id = %s", (existing["rule_id"],))
+            cur.execute("DELETE FROM task_recurrence_month_days WHERE rule_id = %s", (existing["rule_id"],))
+            cur.execute("DELETE FROM task_recurrence_year_days WHERE rule_id = %s", (existing["rule_id"],))
+            for weekday in weekdays:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_weekdays (rule_id, weekday) VALUES (%s, %s)",
+                    (existing["rule_id"], weekday),
+                )
+            for day_of_month in month_days:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_month_days (rule_id, day_of_month) VALUES (%s, %s)",
+                    (existing["rule_id"], day_of_month),
+                )
+            for month_num, day_of_month in year_dates:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_year_days (rule_id, month_num, day_of_month) VALUES (%s, %s, %s)",
+                    (existing["rule_id"], month_num, day_of_month),
+                )
+        finally:
+            cur.close()
+        self.conn.commit()
+
     def add_meeting(
         self,
         title: str,
@@ -1087,7 +1184,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.project_id, p.name AS project_name
+            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.project_id, t.occurrence_date, p.name AS project_name
             FROM daily_selection ds
             JOIN tasks t ON t.id = ds.task_id
             JOIN projects p ON p.id = t.project_id
@@ -1136,7 +1233,7 @@ class TimeOnTask:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
             """
-            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.completed_on, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.completed_on, t.occurrence_date, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             WHERE t.is_completed = 1 AND t.completed_on >= %s AND t.completed_on <= %s
@@ -1169,7 +1266,7 @@ class TimeOnTask:
             where_clause += " AND t.is_archived = 0 AND p.is_archived = 0"
         cur.execute(
             f"""
-            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_archived, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_archived, t.occurrence_date, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             {where_clause}
@@ -1201,7 +1298,7 @@ class TimeOnTask:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         cur = self.conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on FROM tasks WHERE id = %s",
+            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on, occurrence_date FROM tasks WHERE id = %s",
             (task_id,),
         )
         row = cur.fetchone()
@@ -1245,7 +1342,7 @@ class TimeOnTask:
             where_clause = "WHERE t.is_archived = 0 AND p.is_archived = 0"
         cur.execute(
             f"""
-            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, t.is_archived, t.archived_on, p.name AS project_name
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, t.is_archived, t.archived_on, t.occurrence_date, p.name AS project_name
             FROM tasks t
             JOIN projects p ON p.id = t.project_id
             {where_clause}

@@ -85,9 +85,12 @@
   <button type="submit">Add Recurring Template</button>
 </form>
 
-<ul>
+  <ul>
   {% for tpl in recurring_templates %}
-    <li>#{{ tpl.id }} {{ tpl.project_name }} — {{ tpl.title }} ({{ tpl.freq }} every {{ tpl.interval_n }}, starts {{ tpl.starts_on }})</li>
+    <li>
+      #{{ tpl.id }} {{ tpl.project_name }} — {{ tpl.title }} ({{ tpl.freq }} every {{ tpl.interval_n }}, starts {{ tpl.starts_on }})
+      <a href="{{ url_for('edit_recurring_task_template', template_id=tpl.id, sort=sort) }}">Edit</a>
+    </li>
   {% else %}
     <li>No recurring templates yet.</li>
   {% endfor %}
@@ -117,7 +120,7 @@
         {% for task in project_group.list %}
           <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
             <div class="task-row-main">
-              #{{ task.id }} — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
+              #{{ task.id }} — {{ task.title }}{% if task.occurrence_date %} on {{ task.occurrence_date }}{% endif %} {% if task.priority %}[P{{ task.priority }}]{% endif %}
               {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
               {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
             </div>
@@ -147,7 +150,7 @@
       {% for task in tasks %}
         <li class="task-row {% if task.is_overdue %}task-overdue{% endif %}">
           <div class="task-row-main">
-            #{{ task.id }} (<a href="{{ url_for('project_dashboard', project_id=task.project_id) }}">{{ task.project_name }}</a>) — {{ task.title }} {% if task.priority %}[P{{ task.priority }}]{% endif %}
+            #{{ task.id }} (<a href="{{ url_for('project_dashboard', project_id=task.project_id) }}">{{ task.project_name }}</a>) — {{ task.title }}{% if task.occurrence_date %} on {{ task.occurrence_date }}{% endif %} {% if task.priority %}[P{{ task.priority }}]{% endif %}
             {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
             {% if task.is_overdue %}<span class="status-pill status-pill-danger">Overdue</span>{% endif %}
           </div>

@@ -142,6 +142,31 @@ class FakeCursor:
             )
             self.lastrowid = len(self.db["task_recurrence_rules"])
             return
+        if q.startswith("update task_templates set project_id = %s, title = %s, due_date = %s, priority = %s where id = %s"):
+            for template in self.db["task_templates"]:
+                if template["id"] == params[4]:
+                    template["project_id"] = params[0]
+                    template["title"] = params[1]
+                    template["due_date"] = params[2]
+                    template["priority"] = params[3]
+            return
+        if q.startswith("update task_recurrence_rules set freq = %s, interval_n = %s, starts_on = %s, ends_on = %s where id = %s"):
+            for rule in self.db["task_recurrence_rules"]:
+                if rule["id"] == params[4]:
+                    rule["freq"] = params[0]
+                    rule["interval_n"] = params[1]
+                    rule["starts_on"] = params[2]
+                    rule["ends_on"] = params[3]
+            return
+        if q.startswith("delete from task_recurrence_weekdays where rule_id = %s"):
+            self.db["task_recurrence_weekdays"] = [r for r in self.db["task_recurrence_weekdays"] if r["rule_id"] != params[0]]
+            return
+        if q.startswith("delete from task_recurrence_month_days where rule_id = %s"):
+            self.db["task_recurrence_month_days"] = [r for r in self.db["task_recurrence_month_days"] if r["rule_id"] != params[0]]
+            return
+        if q.startswith("delete from task_recurrence_year_days where rule_id = %s"):
+            self.db["task_recurrence_year_days"] = [r for r in self.db["task_recurrence_year_days"] if r["rule_id"] != params[0]]
+            return
         if q.startswith("insert ignore into task_recurrence_weekdays"):
             row = {"rule_id": params[0], "weekday": params[1]}
             if row not in self.db["task_recurrence_weekdays"]:
@@ -288,6 +313,7 @@ class FakeCursor:
                             "priority": task["priority"],
                             "is_completed": task["is_completed"],
                             "project_id": task["project_id"],
+                            "occurrence_date": task.get("occurrence_date"),
                             "project_name": proj["name"],
                         }
                     )
@@ -325,6 +351,7 @@ class FakeCursor:
                         "due_date": task["due_date"],
                         "priority": task["priority"],
                         "completed_on": task["completed_on"],
+                        "occurrence_date": task.get("occurrence_date"),
                         "project_name": proj["name"],
                     }
                 )
@@ -418,6 +445,31 @@ class FakeCursor:
                 )
             self.results = out
             return
+        if "from task_templates t join task_recurrence_rules r on r.template_id = t.id where t.id = %s and t.is_active = 1" in q:
+            template_id = params[0]
+            template = next((t for t in self.db["task_templates"] if t["id"] == template_id and t["is_active"] == 1), None)
+            if not template:
+                self.results = []
+                return
+            rule = next((r for r in self.db["task_recurrence_rules"] if r["template_id"] == template_id), None)
+            if not rule:
+                self.results = []
+                return
+            self.results = [
+                {
+                    "id": template["id"],
+                    "title": template["title"],
+                    "project_id": template["project_id"],
+                    "due_date": template["due_date"],
+                    "priority": template["priority"],
+                    "rule_id": rule["id"],
+                    "freq": rule["freq"],
+                    "interval_n": rule["interval_n"],
+                    "starts_on": rule["starts_on"],
+                    "ends_on": rule["ends_on"],
+                }
+            ]
+            return
         if "from meetings m left join projects p on p.id = m.project_id" in q and "where m.is_active = 1 and m.weekday = %s" in q:
             weekday = params[0]
             out = []
@@ -481,7 +533,7 @@ class FakeCursor:
             out.sort(key=lambda row: row["id"])
             self.results = out
             return
-        if q.startswith("select id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on from tasks where id"):
+        if q.startswith("select id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on, occurrence_date from tasks where id"):
             task_id = params[0]
             task = next((t for t in self.db["tasks"] if t["id"] == task_id), None)
             self.results = [task] if task else []
@@ -514,6 +566,7 @@ class FakeCursor:
                         "is_completed": task["is_completed"],
                         "is_archived": task["is_archived"],
                         "archived_on": task["archived_on"],
+                        "occurrence_date": task.get("occurrence_date"),
                         "project_name": proj["name"],
                     }
                 )
@@ -1246,3 +1299,59 @@ def test_meetings_can_be_edited_from_meetings_page(client):
     html = response.get_data(as_text=True)
     assert "Meeting updated." in html
     assert "Team Sync" in html
+
+
+def test_recurring_task_template_can_be_edited(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/projects", data={"name": "Beta"})
+    client.post(
+        "/tasks/recurring",
+        data={
+            "title": "Daily recurring",
+            "project_id": "1",
+            "freq": "DAILY",
+            "interval_n": "1",
+            "starts_on": "2026-03-01",
+            "ends_on": "",
+            "weekdays": "",
+            "month_days": "",
+            "year_dates": "",
+            "due_date": "",
+            "priority": "",
+            "sort": "project",
+        },
+        follow_redirects=True,
+    )
+    response = client.post(
+        "/tasks/recurring/1/edit",
+        data={
+            "title": "Daily recurring updated",
+            "project_id": "2",
+            "freq": "WEEKLY",
+            "interval_n": "1",
+            "starts_on": "2026-03-01",
+            "ends_on": "",
+            "weekdays": "2",
+            "month_days": "",
+            "year_dates": "",
+            "due_date": "",
+            "priority": "2",
+            "sort": "project",
+        },
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+    assert "Recurring template updated." in html
+    assert "Daily recurring updated" in html
+    assert "Beta" in html
+
+
+def test_week_review_uses_clear_completed_labels(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks", data={"title": "Plan sprint", "project_id": "1"})
+    client.post("/weekly-goals", data={"task_id": "1"})
+    html = client.get("/week-review").get_data(as_text=True)
+    assert "Completed Goals" in html
+    assert "Weekly goals completed." in html
+    assert "Completed Tasks This Week" in html
+    assert "All tasks completed this week." in html

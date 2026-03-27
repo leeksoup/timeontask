@@ -10,6 +10,7 @@ from timeontask import TimeOnTask, load_dotenv
 load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "timeontask-dev"
+RECURRING_HORIZON_DAYS = 7
 
 
 def bool_env(name: str, default: bool = False) -> bool:
@@ -51,7 +52,7 @@ def is_overdue(due_date: object, *, today_iso: str | None = None) -> bool:
 def dashboard() -> str:
     tracker = TimeOnTask()
     try:
-        tracker.generate_recurring_tasks(horizon_days=14)
+        tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
         projects = tracker.list_projects()
         tasks = tracker.list_tasks()
         today_rows = tracker.list_today()
@@ -176,7 +177,7 @@ def restore_project(project_id: int) -> str:
 def project_dashboard(project_id: int) -> str:
     tracker = TimeOnTask()
     try:
-        tracker.generate_recurring_tasks(horizon_days=14)
+        tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
         project = tracker.get_project(project_id)
         if project is None:
             flash("Project not found.")
@@ -230,7 +231,7 @@ def tasks() -> str:
         if sort not in {"created", "project"}:
             sort = "created"
         session["tasks_sort"] = sort
-        tracker.generate_recurring_tasks(horizon_days=14)
+        tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
 
         if request.method == "POST":
             title = request.form.get("title", "").strip()
@@ -372,12 +373,73 @@ def add_recurring_task_template() -> str:
                 due_date=due_date,
                 priority=priority,
             )
-            tracker.generate_recurring_tasks()
+            tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
             flash("Recurring template created.")
         except ValueError as exc:
             flash(str(exc))
 
         return redirect(url_for("tasks", sort=sort))
+    finally:
+        tracker.close()
+
+
+@app.route("/tasks/recurring/<int:template_id>/edit", methods=["GET", "POST"])
+def edit_recurring_task_template(template_id: int) -> str:
+    tracker = TimeOnTask()
+    try:
+        sort = request.values.get("sort", session.get("tasks_sort", "created"))
+        if sort not in {"created", "project"}:
+            sort = "created"
+
+        template = tracker.get_recurring_template(template_id)
+        if template is None:
+            flash("Recurring template not found.")
+            return redirect(url_for("tasks", sort=sort))
+
+        if request.method == "POST":
+            title = request.form.get("title", "").strip()
+            project_id = request.form.get("project_id", "").strip()
+            freq = request.form.get("freq", "").strip()
+            interval_n = request.form.get("interval_n", "1").strip()
+            starts_on = request.form.get("starts_on", "")
+            ends_on = request.form.get("ends_on", "")
+            weekdays = request.form.get("weekdays", "")
+            month_days = request.form.get("month_days", "")
+            year_dates = request.form.get("year_dates", "")
+            due_date = request.form.get("due_date", "")
+            priority = request.form.get("priority", "")
+
+            if not title or not project_id or not freq:
+                flash("Recurring template needs title, project, and frequency.")
+                return redirect(url_for("edit_recurring_task_template", template_id=template_id, sort=sort))
+
+            try:
+                tracker.update_recurring_template(
+                    template_id=template_id,
+                    project_id=int(project_id),
+                    title=title,
+                    freq=freq,
+                    interval_n=int(interval_n),
+                    starts_on=starts_on,
+                    ends_on=ends_on,
+                    weekdays_csv=weekdays,
+                    month_days_csv=month_days,
+                    year_dates_csv=year_dates,
+                    due_date=due_date,
+                    priority=priority,
+                )
+                tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
+                flash("Recurring template updated.")
+                return redirect(url_for("tasks", sort=sort))
+            except ValueError as exc:
+                flash(str(exc))
+
+        return render_template(
+            "recurring_edit.html",
+            template=template,
+            projects=tracker.list_projects(),
+            sort=sort,
+        )
     finally:
         tracker.close()
 
@@ -709,7 +771,7 @@ def weekly_goals() -> str:
 def today() -> str:
     tracker = TimeOnTask()
     try:
-        tracker.generate_recurring_tasks(horizon_days=14)
+        tracker.generate_recurring_tasks(horizon_days=RECURRING_HORIZON_DAYS)
         if request.method == "POST":
             task_id = request.form.get("task_id", "").strip()
             if task_id:
