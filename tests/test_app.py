@@ -242,6 +242,14 @@ class FakeCursor:
                     task["is_completed"] = 1
                     task["completed_on"] = params[0]
             return
+        if q.startswith("update tasks set project_id = %s, title = %s, due_date = %s, priority = %s where id = %s"):
+            for task in self.db["tasks"]:
+                if task["id"] == params[4]:
+                    task["project_id"] = params[0]
+                    task["title"] = params[1]
+                    task["due_date"] = params[2]
+                    task["priority"] = params[3]
+            return
         if q.startswith("update tasks set is_archived = 1, archived_on = %s where id = %s"):
             for task in self.db["tasks"]:
                 if task["id"] == params[1]:
@@ -295,6 +303,9 @@ class FakeCursor:
             self.db["daily_selection"] = [
                 row for row in self.db["daily_selection"] if not (row["day_date"] == params[0] and row["task_id"] == params[1])
             ]
+            return
+        if q.startswith("delete from daily_selection where task_id = %s"):
+            self.db["daily_selection"] = [row for row in self.db["daily_selection"] if row["task_id"] != params[0]]
             return
         if "from daily_selection ds join tasks" in q and "where ds.day_date" in q:
             today = params[0]
@@ -423,6 +434,20 @@ class FakeCursor:
                 None,
             )
             self.results = [{"id": match["id"]}] if match else []
+            return
+        if "select id, occurrence_date from tasks where template_id = %s and is_completed = 0 and is_archived = 0 and occurrence_date is not null and occurrence_date >= %s" in q:
+            template_id, today_iso = params
+            out = [
+                {"id": t["id"], "occurrence_date": t.get("occurrence_date")}
+                for t in self.db["tasks"]
+                if t.get("template_id") == template_id
+                and t.get("occurrence_date")
+                and t["is_completed"] == 0
+                and t["is_archived"] == 0
+                and t["occurrence_date"] >= today_iso
+            ]
+            out.sort(key=lambda row: (row["occurrence_date"], row["id"]))
+            self.results = out
             return
         if "from task_templates t join task_recurrence_rules r" in q:
             out = []
@@ -1358,3 +1383,59 @@ def test_week_review_uses_clear_completed_labels(client):
     assert "Weekly goals completed." in html
     assert "Completed Tasks This Week" in html
     assert "All tasks completed this week." in html
+
+
+def test_completed_tasks_do_not_show_snooze_action(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/tasks", data={"title": "Done task", "project_id": "1"})
+    client.post("/tasks/1/complete", follow_redirects=True)
+    html = client.get("/tasks?sort=project").get_data(as_text=True)
+    row_start = html.index("#1")
+    row_end = html.index("Edit", row_start)
+    row_html = html[row_start:row_end]
+    assert "Snooze to Next Week" not in row_html
+
+
+def test_edit_recurring_template_updates_existing_future_generated_tasks(client):
+    client.post("/projects", data={"name": "Alpha"})
+    client.post("/projects", data={"name": "Beta"})
+    client.post(
+        "/tasks/recurring",
+        data={
+            "title": "Create new chapter section",
+            "project_id": "1",
+            "freq": "DAILY",
+            "interval_n": "1",
+            "starts_on": "2026-03-01",
+            "ends_on": "",
+            "weekdays": "",
+            "month_days": "",
+            "year_dates": "",
+            "due_date": "",
+            "priority": "",
+            "sort": "project",
+        },
+        follow_redirects=True,
+    )
+    response = client.post(
+        "/tasks/recurring/1/edit",
+        data={
+            "title": "Create chapter notes",
+            "project_id": "2",
+            "freq": "DAILY",
+            "interval_n": "1",
+            "starts_on": "2026-03-01",
+            "ends_on": "",
+            "weekdays": "",
+            "month_days": "",
+            "year_dates": "",
+            "due_date": "",
+            "priority": "2",
+            "sort": "project",
+        },
+        follow_redirects=True,
+    )
+    html = response.get_data(as_text=True)
+    assert "Recurring template updated." in html
+    assert "Create chapter notes" in html
+    assert "Create new chapter section on " not in html

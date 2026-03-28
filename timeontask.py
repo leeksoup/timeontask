@@ -751,6 +751,12 @@ class TimeOnTask:
         weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
         month_days = self._parse_csv_ints(month_days_csv, 1, 31)
         year_dates = self._parse_year_dates(year_dates_csv)
+        updated_rule = {
+            "freq": freq_clean,
+            "interval_n": interval_n,
+            "starts_on": starts_on_iso,
+            "ends_on": ends_on_iso,
+        }
 
         cur = self.conn.cursor()
         try:
@@ -780,6 +786,31 @@ class TimeOnTask:
                     "INSERT IGNORE INTO task_recurrence_year_days (rule_id, month_num, day_of_month) VALUES (%s, %s, %s)",
                     (existing["rule_id"], month_num, day_of_month),
                 )
+            today_iso = date.today().isoformat()
+            cur.execute(
+                """
+                SELECT id, occurrence_date
+                FROM tasks
+                WHERE template_id = %s AND is_completed = 0 AND is_archived = 0
+                  AND occurrence_date IS NOT NULL AND occurrence_date >= %s
+                """,
+                (template_id, today_iso),
+            )
+            future_tasks = cur.fetchall()
+            for task_row in future_tasks:
+                occurrence_iso = str(task_row["occurrence_date"])
+                occurrence_day = date.fromisoformat(occurrence_iso)
+                if self._rule_matches_date(updated_rule, occurrence_day, weekdays, month_days, year_dates):
+                    cur.execute(
+                        "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s WHERE id = %s",
+                        (project_id, title.strip(), due_date_iso, priority_val, task_row["id"]),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE tasks SET is_archived = 1, archived_on = %s WHERE id = %s",
+                        (today_iso, task_row["id"]),
+                    )
+                    cur.execute("DELETE FROM daily_selection WHERE task_id = %s", (task_row["id"],))
         finally:
             cur.close()
         self.conn.commit()
