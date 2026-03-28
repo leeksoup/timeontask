@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Meetings</h2>
+<p>Create recurring weekly meetings and review upcoming weekly schedule slots.</p>
+
+<form method="post">
+  <label>
+    Title
+    <input name="title" required />
+  </label>
+
+  <label>
+    Project (optional)
+    <select name="project_id">
+      <option value="">No project</option>
+      {% for project in projects %}
+      <option value="{{ project.id }}">{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Weekday
+    <select name="weekday" required>
+      {% for value, label in weekday_choices %}
+      <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Start time
+    <input type="time" name="start_time" required />
+  </label>
+
+  <label>
+    Duration (minutes)
+    <input type="number" name="duration_minutes" min="1" value="30" required />
+  </label>
+
+  <button type="submit">Create meeting</button>
+</form>
+
+<h3>Recurring weekly meetings</h3>
+<ul>
+  {% for meeting in meetings %}
+  <li>
+    <strong>{{ meeting.weekday_name }}</strong> {{ meeting.start_time }} ({{ meeting.duration_minutes }} min) — {{ meeting.title }}
+    {% if meeting.project_name %}<em>[{{ meeting.project_name }}]</em>{% endif %}
+    <a href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">Edit</a>
+    <form method="post" action="{{ url_for('create_task_from_meeting', meeting_id=meeting.id) }}">
+      <input type="hidden" name="next_view" value="meetings" />
+      {% if meeting.project_id %}
+      <input type="hidden" name="project_id" value="{{ meeting.project_id }}" />
+      {% else %}
+      <label>
+        Project
+        <select name="project_id" required>
+          <option value="">Choose project</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <input type="hidden" name="title" value="Follow up: {{ meeting.title }}" />
+      <button type="submit">Create follow-up task</button>
+    </form>
+  </li>
+  {% else %}
+  <li>No meetings configured yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

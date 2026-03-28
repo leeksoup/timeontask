@@ -1,0 +1,1497 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from dataclasses import dataclass
+from datetime import date, timedelta
+import calendar
+from pathlib import Path
+from typing import Any, Callable, Iterable
+
+
+@dataclass
+class GoalProgress:
+    total: int
+    completed: int
+
+
+@dataclass
+class DuplicateTaskWarning:
+    task_id: int
+    title: str
+    is_completed: int
+
+
+@dataclass
+class WeekReviewSummary:
+    total: int
+    completed: int
+    deferred: int
+    blocked: int
+    carried_forward: int
+    unreviewed: int
+    completed_tasks: int = 0
+
+
+def create_mysql_connection() -> Any:
+    import mysql.connector
+
+    return mysql.connector.connect(
+        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        user=os.getenv("MYSQL_USER", "root"),
+        password=os.getenv("MYSQL_PASSWORD", ""),
+        database=os.getenv("MYSQL_DATABASE", "timeontask"),
+        autocommit=False,
+    )
+
+
+def load_dotenv(path: str = ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        clean_value = value.strip().strip("'\"")
+        os.environ.setdefault(key, clean_value)
+
+
+class TimeOnTask:
+    def __init__(self, connection_factory: Callable[[], Any] = create_mysql_connection):
+        self.conn = connection_factory()
+        self._init_db()
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def _init_db(self) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              name VARCHAR(255) NOT NULL UNIQUE,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0,
+              archived_on DATE NULL
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_on DATE NULL")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meetings (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NULL,
+              title VARCHAR(255) NOT NULL,
+              weekday TINYINT NOT NULL,
+              start_time TIME NOT NULL,
+              duration_minutes INT NOT NULL,
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              due_date DATE NULL,
+              priority TINYINT NULL,
+              template_id INT NULL,
+              source_meeting_id INT NULL,
+              occurrence_date DATE NULL,
+              completed_on DATE NULL,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0,
+              archived_on DATE NULL,
+              is_completed TINYINT(1) NOT NULL DEFAULT 0,
+              FOREIGN KEY (project_id) REFERENCES projects(id),
+              FOREIGN KEY (source_meeting_id) REFERENCES meetings(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TINYINT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_meeting_id INT NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_date DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_on DATE NULL")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_on DATE NULL")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subtasks (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              task_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              is_completed TINYINT(1) NOT NULL DEFAULT 0,
+              position INT NOT NULL,
+              FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_templates (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              project_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              due_date DATE NULL,
+              priority TINYINT NULL,
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              FOREIGN KEY (project_id) REFERENCES projects(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_templates (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              name VARCHAR(255) NOT NULL UNIQUE,
+              is_archived TINYINT(1) NOT NULL DEFAULT 0
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute("ALTER TABLE project_templates ADD COLUMN IF NOT EXISTS is_archived TINYINT(1) NOT NULL DEFAULT 0")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_template_tasks (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              template_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              due_offset_days INT NULL,
+              priority TINYINT NULL,
+              position INT NOT NULL,
+              FOREIGN KEY (template_id) REFERENCES project_templates(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_rules (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              template_id INT NOT NULL,
+              freq VARCHAR(16) NOT NULL,
+              interval_n INT NOT NULL DEFAULT 1,
+              starts_on DATE NOT NULL,
+              ends_on DATE NULL,
+              FOREIGN KEY (template_id) REFERENCES task_templates(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_weekdays (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              weekday TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_weekday (rule_id, weekday),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_month_days (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              day_of_month TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_month_day (rule_id, day_of_month),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_recurrence_year_days (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              rule_id INT NOT NULL,
+              month_num TINYINT NOT NULL,
+              day_of_month TINYINT NOT NULL,
+              UNIQUE KEY uniq_rule_year_day (rule_id, month_num, day_of_month),
+              FOREIGN KEY (rule_id) REFERENCES task_recurrence_rules(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weekly_goals (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              week_start DATE NOT NULL,
+              task_id INT NOT NULL,
+              review_outcome VARCHAR(32) NULL,
+              review_note TEXT NULL,
+              carried_to_week_start DATE NULL,
+              UNIQUE KEY uniq_week_task (week_start, task_id),
+              FOREIGN KEY (task_id) REFERENCES tasks(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS review_outcome VARCHAR(32) NULL")
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS review_note TEXT NULL")
+        cur.execute("ALTER TABLE weekly_goals ADD COLUMN IF NOT EXISTS carried_to_week_start DATE NULL")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_selection (
+              id INT PRIMARY KEY AUTO_INCREMENT,
+              day_date DATE NOT NULL,
+              task_id INT NOT NULL,
+              UNIQUE KEY uniq_day_task (day_date, task_id),
+              FOREIGN KEY (task_id) REFERENCES tasks(id)
+            ) ENGINE=InnoDB
+            """
+        )
+        cur.close()
+        self.conn.commit()
+
+    @staticmethod
+    def _normalize_due_date(due_date: str | None) -> str | None:
+        if due_date is None:
+            return None
+        clean = due_date.strip()
+        if not clean:
+            return None
+        try:
+            return date.fromisoformat(clean).isoformat()
+        except ValueError as exc:
+            raise ValueError("Due date must be YYYY-MM-DD.") from exc
+
+    @staticmethod
+    def _normalize_priority(priority: str | int | None) -> int | None:
+        if priority is None:
+            return None
+        if isinstance(priority, str):
+            clean = priority.strip()
+            if not clean:
+                return None
+            try:
+                parsed = int(clean)
+            except ValueError as exc:
+                raise ValueError("Priority must be 1, 2, or 3.") from exc
+        else:
+            parsed = int(priority)
+
+        if parsed not in {1, 2, 3}:
+            raise ValueError("Priority must be 1, 2, or 3.")
+        return parsed
+
+    @staticmethod
+    def week_start(day: date | None = None) -> str:
+        today = day or date.today()
+        return (today - timedelta(days=today.weekday())).isoformat()
+
+    @staticmethod
+    def _parse_csv_ints(value: str | None, minimum: int, maximum: int) -> list[int]:
+        if not value:
+            return []
+        items: list[int] = []
+        for token in value.split(","):
+            clean = token.strip()
+            if not clean:
+                continue
+            try:
+                parsed = int(clean)
+            except ValueError as exc:
+                raise ValueError("Expected comma-separated numbers.") from exc
+            if parsed < minimum or parsed > maximum:
+                raise ValueError(f"Values must be between {minimum} and {maximum}.")
+            items.append(parsed)
+        return sorted(set(items))
+
+    @staticmethod
+    def _parse_year_dates(value: str | None) -> list[tuple[int, int]]:
+        if not value:
+            return []
+        out: list[tuple[int, int]] = []
+        for token in value.split(","):
+            clean = token.strip()
+            if not clean:
+                continue
+            try:
+                month_part, day_part = clean.split("-", 1)
+                month_num = int(month_part)
+                day_num = int(day_part)
+            except ValueError as exc:
+                raise ValueError("Yearly dates must be MM-DD, comma-separated.") from exc
+            if month_num < 1 or month_num > 12:
+                raise ValueError("Yearly MM-DD values are out of range.")
+            max_day = calendar.monthrange(2024, month_num)[1]
+            if day_num < 1 or day_num > max_day:
+                raise ValueError("Yearly MM-DD values must be valid calendar dates.")
+            out.append((month_num, day_num))
+        return sorted(set(out))
+
+    def add_project(self, name: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute("INSERT INTO projects (name) VALUES (%s)", (name.strip(),))
+        cur.close()
+        self.conn.commit()
+
+    def get_project(self, project_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, name, is_archived, archived_on FROM projects WHERE id = %s", (project_id,))
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def rename_project(self, project_id: int, name: str) -> None:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Project name is required.")
+        cur = self.conn.cursor()
+        cur.execute("UPDATE projects SET name = %s WHERE id = %s", (clean_name, project_id))
+        cur.close()
+        self.conn.commit()
+
+    def archive_project(self, project_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE projects SET is_archived = 1, archived_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), project_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def restore_project(self, project_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE projects SET is_archived = 0, archived_on = NULL WHERE id = %s", (project_id,))
+        cur.close()
+        self.conn.commit()
+
+    def add_project_template(self, name: str, task_specs: list[dict[str, Any]]) -> int:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Template name is required.")
+        cur = self.conn.cursor()
+        cur.execute("INSERT INTO project_templates (name, is_archived) VALUES (%s, 0)", (clean_name,))
+        template_id = cur.lastrowid
+        for position, spec in enumerate(task_specs, start=1):
+            title = str(spec["title"]).strip()
+            if not title:
+                raise ValueError("Template task title is required.")
+            due_offset_days = spec.get("due_offset_days")
+            if due_offset_days in {"", None}:
+                due_offset_days = None
+            elif isinstance(due_offset_days, str):
+                due_offset_days = int(due_offset_days.strip())
+            priority = self._normalize_priority(spec.get("priority"))
+            cur.execute(
+                """
+                INSERT INTO project_template_tasks (template_id, title, due_offset_days, priority, position)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (template_id, title, due_offset_days, priority, position),
+            )
+        cur.close()
+        self.conn.commit()
+        return template_id
+
+    def list_project_templates(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, name, is_archived FROM project_templates WHERE is_archived = 0 ORDER BY name")
+        rows = cur.fetchall()
+        for row in rows:
+            cur.execute(
+                """
+                SELECT id, template_id, title, due_offset_days, priority, position
+                FROM project_template_tasks
+                WHERE template_id = %s
+                ORDER BY position, id
+                """,
+                (row["id"],),
+            )
+            row["tasks"] = cur.fetchall()
+        cur.close()
+        return rows
+
+    def create_project_from_template(self, template_id: int, project_name: str, starts_on: str | None = None) -> int:
+        clean_project_name = project_name.strip()
+        if not clean_project_name:
+            raise ValueError("Project name is required.")
+        start_day = date.fromisoformat(self._normalize_due_date(starts_on) or date.today().isoformat())
+        templates = {template["id"]: template for template in self.list_project_templates()}
+        template = templates.get(template_id)
+        if template is None:
+            raise ValueError("Project template not found.")
+        self.add_project(clean_project_name)
+        project_id = max(int(project["id"]) for project in self.list_projects(include_archived=True))
+        for task_spec in template["tasks"]:
+            offset = task_spec.get("due_offset_days")
+            due_date = None if offset is None else (start_day + timedelta(days=int(offset))).isoformat()
+            self.add_task(project_id, str(task_spec["title"]), due_date=due_date, priority=task_spec.get("priority"))
+        return project_id
+
+    def add_task(
+        self,
+        project_id: int,
+        title: str,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO tasks (project_id, title, due_date, priority, is_completed) VALUES (%s, %s, %s, %s, 0)",
+            (project_id, title.strip(), due_date_iso, priority_val),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def find_duplicate_incomplete_tasks(self, project_id: int, title: str) -> list[DuplicateTaskWarning]:
+        clean_title = title.strip().casefold()
+        duplicates: list[DuplicateTaskWarning] = []
+        for task in self.list_incomplete_tasks(sort_by="project"):
+            if int(task["project_id"]) != project_id:
+                continue
+            if str(task["title"]).strip().casefold() != clean_title:
+                continue
+            duplicates.append(
+                DuplicateTaskWarning(
+                    task_id=int(task["id"]),
+                    title=str(task["title"]),
+                    is_completed=int(task["is_completed"]),
+                )
+            )
+        return duplicates
+
+    def add_task_batch(
+        self,
+        project_id: int,
+        base_title: str,
+        count: int,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
+        clean_title = base_title.strip()
+        if not clean_title:
+            raise ValueError("Base title is required.")
+        if count < 1:
+            raise ValueError("Count must be at least 1.")
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
+        cur = self.conn.cursor()
+        try:
+            for idx in range(1, count + 1):
+                cur.execute(
+                    "INSERT INTO tasks (project_id, title, due_date, priority, is_completed) VALUES (%s, %s, %s, %s, 0)",
+                    (project_id, f"{clean_title} {idx}", due_date_iso, priority_val),
+                )
+        finally:
+            cur.close()
+        self.conn.commit()
+        return count
+
+    def add_recurring_template(
+        self,
+        project_id: int,
+        title: str,
+        freq: str,
+        interval_n: int = 1,
+        starts_on: str | None = None,
+        ends_on: str | None = None,
+        weekdays_csv: str | None = None,
+        month_days_csv: str | None = None,
+        year_dates_csv: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
+        freq_clean = freq.strip().upper()
+        if freq_clean not in {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}:
+            raise ValueError("Frequency must be daily, weekly, monthly, or yearly.")
+        if interval_n < 1:
+            raise ValueError("Interval must be at least 1.")
+
+        starts_on_iso = self._normalize_due_date(starts_on) or date.today().isoformat()
+        ends_on_iso = self._normalize_due_date(ends_on)
+        if ends_on_iso is not None and ends_on_iso < starts_on_iso:
+            raise ValueError("End date must be on or after the start date.")
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+        weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
+        month_days = self._parse_csv_ints(month_days_csv, 1, 31)
+        year_dates = self._parse_year_dates(year_dates_csv)
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO task_templates (project_id, title, due_date, priority, is_active) VALUES (%s, %s, %s, %s, 1)",
+                (project_id, title.strip(), due_date_iso, priority_val),
+            )
+            template_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO task_recurrence_rules (template_id, freq, interval_n, starts_on, ends_on) VALUES (%s, %s, %s, %s, %s)",
+                (template_id, freq_clean, interval_n, starts_on_iso, ends_on_iso),
+            )
+            rule_id = cur.lastrowid
+
+            for weekday in weekdays:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_weekdays (rule_id, weekday) VALUES (%s, %s)",
+                    (rule_id, weekday),
+                )
+            for day_of_month in month_days:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_month_days (rule_id, day_of_month) VALUES (%s, %s)",
+                    (rule_id, day_of_month),
+                )
+            for month_num, day_of_month in year_dates:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_year_days (rule_id, month_num, day_of_month) VALUES (%s, %s, %s)",
+                    (rule_id, month_num, day_of_month),
+                )
+        finally:
+            cur.close()
+
+        self.conn.commit()
+        return template_id
+
+    def _rule_matches_date(
+        self,
+        rule: dict[str, Any],
+        target_date: date,
+        weekdays: list[int],
+        month_days: list[int],
+        year_dates: list[tuple[int, int]],
+    ) -> bool:
+        starts_on = date.fromisoformat(str(rule["starts_on"]))
+        if target_date < starts_on:
+            return False
+
+        ends_on_raw = rule.get("ends_on")
+        if ends_on_raw:
+            ends_on = date.fromisoformat(str(ends_on_raw))
+            if target_date > ends_on:
+                return False
+
+        interval_n = int(rule.get("interval_n") or 1)
+        freq = str(rule["freq"]).upper()
+        if freq == "DAILY":
+            return (target_date - starts_on).days % interval_n == 0
+
+        if freq == "WEEKLY":
+            week_delta = (target_date - starts_on).days // 7
+            if week_delta < 0 or week_delta % interval_n != 0:
+                return False
+            active_weekdays = weekdays or [starts_on.weekday()]
+            return target_date.weekday() in active_weekdays
+
+        if freq == "MONTHLY":
+            months_delta = (target_date.year - starts_on.year) * 12 + (target_date.month - starts_on.month)
+            if months_delta < 0 or months_delta % interval_n != 0:
+                return False
+            active_days = month_days or [starts_on.day]
+            return target_date.day in active_days
+
+        if freq == "YEARLY":
+            years_delta = target_date.year - starts_on.year
+            if years_delta < 0 or years_delta % interval_n != 0:
+                return False
+            active_dates = year_dates or [(starts_on.month, starts_on.day)]
+            return (target_date.month, target_date.day) in active_dates
+
+        return False
+
+    def generate_recurring_tasks(self, day: date | None = None, horizon_days: int = 0) -> int:
+        start_day = day or date.today()
+        end_day = start_day + timedelta(days=max(0, horizon_days))
+
+        created = 0
+        cur = self.conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT r.id, r.template_id, r.freq, r.interval_n, r.starts_on, r.ends_on,
+                       t.project_id, t.title, t.due_date, t.priority
+                FROM task_recurrence_rules r
+                JOIN task_templates t ON t.id = r.template_id
+                WHERE t.is_active = 1
+                ORDER BY r.id
+                """
+            )
+            rules = cur.fetchall()
+
+            for rule in rules:
+                cur.execute("SELECT weekday FROM task_recurrence_weekdays WHERE rule_id = %s", (rule["id"],))
+                weekdays = [row["weekday"] for row in cur.fetchall()]
+
+                cur.execute(
+                    "SELECT day_of_month FROM task_recurrence_month_days WHERE rule_id = %s",
+                    (rule["id"],),
+                )
+                month_days = [row["day_of_month"] for row in cur.fetchall()]
+
+                cur.execute(
+                    "SELECT month_num, day_of_month FROM task_recurrence_year_days WHERE rule_id = %s",
+                    (rule["id"],),
+                )
+                year_dates = [(row["month_num"], row["day_of_month"]) for row in cur.fetchall()]
+
+                current = start_day
+                while current <= end_day:
+                    if self._rule_matches_date(rule, current, weekdays, month_days, year_dates):
+                        occurrence = current.isoformat()
+                        cur.execute(
+                            "SELECT id FROM tasks WHERE template_id = %s AND occurrence_date = %s",
+                            (rule["template_id"], occurrence),
+                        )
+                        exists = cur.fetchone()
+                        if not exists:
+                            cur.execute(
+                                """
+                                INSERT INTO tasks
+                                  (project_id, title, due_date, priority, template_id, occurrence_date, is_completed)
+                                VALUES (%s, %s, %s, %s, %s, %s, 0)
+                                """,
+                                (
+                                    rule["project_id"],
+                                    rule["title"],
+                                    rule.get("due_date"),
+                                    rule.get("priority"),
+                                    rule["template_id"],
+                                    occurrence,
+                                ),
+                            )
+                            created += 1
+                    current += timedelta(days=1)
+        finally:
+            cur.close()
+
+        self.conn.commit()
+        return created
+
+    def list_recurring_templates(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, p.name AS project_name, r.freq, r.interval_n, r.starts_on, r.ends_on
+            FROM task_templates t
+            JOIN task_recurrence_rules r ON r.template_id = t.id
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.is_active = 1
+            ORDER BY t.id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def get_recurring_template(self, template_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, r.id AS rule_id, r.freq, r.interval_n, r.starts_on, r.ends_on
+            FROM task_templates t
+            JOIN task_recurrence_rules r ON r.template_id = t.id
+            WHERE t.id = %s AND t.is_active = 1
+            """,
+            (template_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.close()
+            return None
+
+        cur.execute("SELECT weekday FROM task_recurrence_weekdays WHERE rule_id = %s ORDER BY weekday", (row["rule_id"],))
+        row["weekdays"] = [int(r["weekday"]) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT day_of_month FROM task_recurrence_month_days WHERE rule_id = %s ORDER BY day_of_month",
+            (row["rule_id"],),
+        )
+        row["month_days"] = [int(r["day_of_month"]) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT month_num, day_of_month FROM task_recurrence_year_days WHERE rule_id = %s ORDER BY month_num, day_of_month",
+            (row["rule_id"],),
+        )
+        row["year_dates"] = [f"{int(r['month_num']):02d}-{int(r['day_of_month']):02d}" for r in cur.fetchall()]
+        cur.close()
+        return row
+
+    def update_recurring_template(
+        self,
+        template_id: int,
+        project_id: int,
+        title: str,
+        freq: str,
+        interval_n: int = 1,
+        starts_on: str | None = None,
+        ends_on: str | None = None,
+        weekdays_csv: str | None = None,
+        month_days_csv: str | None = None,
+        year_dates_csv: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        existing = self.get_recurring_template(template_id)
+        if existing is None:
+            raise ValueError("Recurring template not found.")
+        freq_clean = freq.strip().upper()
+        if freq_clean not in {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}:
+            raise ValueError("Frequency must be daily, weekly, monthly, or yearly.")
+        if interval_n < 1:
+            raise ValueError("Interval must be at least 1.")
+        starts_on_iso = self._normalize_due_date(starts_on) or date.today().isoformat()
+        ends_on_iso = self._normalize_due_date(ends_on)
+        if ends_on_iso is not None and ends_on_iso < starts_on_iso:
+            raise ValueError("End date must be on or after the start date.")
+
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+        weekdays = self._parse_csv_ints(weekdays_csv, 0, 6)
+        month_days = self._parse_csv_ints(month_days_csv, 1, 31)
+        year_dates = self._parse_year_dates(year_dates_csv)
+        updated_rule = {
+            "freq": freq_clean,
+            "interval_n": interval_n,
+            "starts_on": starts_on_iso,
+            "ends_on": ends_on_iso,
+        }
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE task_templates SET project_id = %s, title = %s, due_date = %s, priority = %s WHERE id = %s",
+                (project_id, title.strip(), due_date_iso, priority_val, template_id),
+            )
+            cur.execute(
+                "UPDATE task_recurrence_rules SET freq = %s, interval_n = %s, starts_on = %s, ends_on = %s WHERE id = %s",
+                (freq_clean, interval_n, starts_on_iso, ends_on_iso, existing["rule_id"]),
+            )
+            cur.execute("DELETE FROM task_recurrence_weekdays WHERE rule_id = %s", (existing["rule_id"],))
+            cur.execute("DELETE FROM task_recurrence_month_days WHERE rule_id = %s", (existing["rule_id"],))
+            cur.execute("DELETE FROM task_recurrence_year_days WHERE rule_id = %s", (existing["rule_id"],))
+            for weekday in weekdays:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_weekdays (rule_id, weekday) VALUES (%s, %s)",
+                    (existing["rule_id"], weekday),
+                )
+            for day_of_month in month_days:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_month_days (rule_id, day_of_month) VALUES (%s, %s)",
+                    (existing["rule_id"], day_of_month),
+                )
+            for month_num, day_of_month in year_dates:
+                cur.execute(
+                    "INSERT IGNORE INTO task_recurrence_year_days (rule_id, month_num, day_of_month) VALUES (%s, %s, %s)",
+                    (existing["rule_id"], month_num, day_of_month),
+                )
+            today_iso = date.today().isoformat()
+            cur.execute(
+                """
+                SELECT id, occurrence_date
+                FROM tasks
+                WHERE template_id = %s AND is_completed = 0 AND is_archived = 0
+                  AND occurrence_date IS NOT NULL AND occurrence_date >= %s
+                """,
+                (template_id, today_iso),
+            )
+            future_tasks = cur.fetchall()
+            for task_row in future_tasks:
+                occurrence_iso = str(task_row["occurrence_date"])
+                occurrence_day = date.fromisoformat(occurrence_iso)
+                if self._rule_matches_date(updated_rule, occurrence_day, weekdays, month_days, year_dates):
+                    cur.execute(
+                        "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s WHERE id = %s",
+                        (project_id, title.strip(), due_date_iso, priority_val, task_row["id"]),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE tasks SET is_archived = 1, archived_on = %s WHERE id = %s",
+                        (today_iso, task_row["id"]),
+                    )
+                    cur.execute("DELETE FROM daily_selection WHERE task_id = %s", (task_row["id"],))
+        finally:
+            cur.close()
+        self.conn.commit()
+
+    def add_meeting(
+        self,
+        title: str,
+        weekday: int,
+        start_time: str,
+        duration_minutes: int,
+        project_id: int | None = None,
+    ) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Meeting title is required.")
+        if weekday < 0 or weekday > 6:
+            raise ValueError("Weekday must be between 0 (Mon) and 6 (Sun).")
+        if duration_minutes < 1:
+            raise ValueError("Duration must be at least 1 minute.")
+        try:
+            parts = start_time.strip().split(":")
+            if len(parts) != 2:
+                raise ValueError
+            hh = int(parts[0])
+            mm = int(parts[1])
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                raise ValueError
+            start_time_clean = f"{hh:02d}:{mm:02d}:00"
+        except ValueError as exc:
+            raise ValueError("Start time must be HH:MM (24-hour).") from exc
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO meetings (project_id, title, weekday, start_time, duration_minutes, is_active)
+            VALUES (%s, %s, %s, %s, %s, 1)
+            """,
+            (project_id, clean_title, weekday, start_time_clean, duration_minutes),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def update_meeting(
+        self,
+        meeting_id: int,
+        title: str,
+        weekday: int,
+        start_time: str,
+        duration_minutes: int,
+        project_id: int | None = None,
+    ) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Meeting title is required.")
+        if weekday < 0 or weekday > 6:
+            raise ValueError("Weekday must be between 0 (Mon) and 6 (Sun).")
+        if duration_minutes < 1:
+            raise ValueError("Duration must be at least 1 minute.")
+        try:
+            parts = start_time.strip().split(":")
+            if len(parts) != 2:
+                raise ValueError
+            hh = int(parts[0])
+            mm = int(parts[1])
+            if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+                raise ValueError
+            start_time_clean = f"{hh:02d}:{mm:02d}:00"
+        except ValueError as exc:
+            raise ValueError("Start time must be HH:MM (24-hour).") from exc
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE meetings
+            SET project_id = %s, title = %s, weekday = %s, start_time = %s, duration_minutes = %s
+            WHERE id = %s
+            """,
+            (project_id, clean_title, weekday, start_time_clean, duration_minutes, meeting_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def get_meeting(self, meeting_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.id = %s
+            """,
+            (meeting_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def create_task_from_meeting(
+        self,
+        meeting_id: int,
+        project_id: int | None = None,
+        title: str | None = None,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> int:
+        meeting = self.get_meeting(meeting_id)
+        if meeting is None or int(meeting["is_active"]) != 1:
+            raise ValueError("Meeting not found.")
+
+        resolved_project_id = project_id if project_id is not None else meeting["project_id"]
+        if resolved_project_id is None:
+            raise ValueError("Choose a project for this follow-up task.")
+
+        task_title = (title or f"Follow up: {meeting['title']}").strip()
+        if not task_title:
+            raise ValueError("Task title is required.")
+
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO tasks (project_id, title, due_date, priority, template_id, source_meeting_id, occurrence_date, is_completed)
+            VALUES (%s, %s, %s, %s, NULL, %s, NULL, 0)
+            """,
+            (resolved_project_id, task_title, due_date_iso, priority_val, meeting_id),
+        )
+        task_id = cur.lastrowid
+        cur.close()
+        self.conn.commit()
+        return task_id
+
+    def list_meetings(self) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.is_active = 1
+            ORDER BY m.weekday, m.start_time, m.id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def list_today_meetings(self, day: date | None = None) -> list[dict[str, Any]]:
+        target = day or date.today()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT m.id, m.project_id, m.title, m.weekday, m.start_time, m.duration_minutes, m.is_active,
+                   p.name AS project_name
+            FROM meetings m
+            LEFT JOIN projects p ON p.id = m.project_id
+            WHERE m.is_active = 1 AND m.weekday = %s
+            ORDER BY m.start_time, m.id
+            """,
+            (target.weekday(),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def add_subtask(self, task_id: int, title: str) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Subtask title is required.")
+
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT COALESCE(MAX(position), 0) AS max_position FROM subtasks WHERE task_id = %s", (task_id,))
+        max_position = cur.fetchone()["max_position"]
+        cur.execute(
+            "INSERT INTO subtasks (task_id, title, is_completed, position) VALUES (%s, %s, 0, %s)",
+            (task_id, clean_title, int(max_position) + 1),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def list_subtasks(self, task_id: int) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, task_id, title, is_completed, position FROM subtasks WHERE task_id = %s ORDER BY position, id",
+            (task_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def reorder_subtasks(self, task_id: int, ordered_ids: list[int]) -> None:
+        existing = self.list_subtasks(task_id)
+        existing_ids = {int(subtask["id"]) for subtask in existing}
+        ordered_set = list(dict.fromkeys(ordered_ids))
+        if set(ordered_set) != existing_ids:
+            raise ValueError("Reorder list must include each subtask exactly once.")
+        cur = self.conn.cursor()
+        for position, subtask_id in enumerate(ordered_set, start=1):
+            cur.execute("UPDATE subtasks SET position = %s WHERE id = %s", (position, subtask_id))
+        cur.close()
+        self.conn.commit()
+
+    def set_subtask_completed(self, subtask_id: int, is_completed: bool) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE subtasks SET is_completed = %s WHERE id = %s", (int(is_completed), subtask_id))
+        cur.close()
+        self.conn.commit()
+
+    def delete_subtask(self, subtask_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM subtasks WHERE id = %s", (subtask_id,))
+        cur.close()
+        self.conn.commit()
+
+    def export_data(self) -> dict[str, Any]:
+        if hasattr(self.conn, "db"):
+            return json.loads(json.dumps(self.conn.db))
+        table_names = [
+            "projects",
+            "project_templates",
+            "project_template_tasks",
+            "tasks",
+            "weekly_goals",
+            "daily_selection",
+            "task_templates",
+            "task_recurrence_rules",
+            "task_recurrence_weekdays",
+            "task_recurrence_month_days",
+            "task_recurrence_year_days",
+            "subtasks",
+            "meetings",
+        ]
+        cur = self.conn.cursor(dictionary=True)
+        data: dict[str, Any] = {}
+        for table in table_names:
+            cur.execute(f"SELECT * FROM {table}")
+            data[table] = cur.fetchall()
+        cur.close()
+        return data
+
+    def export_to_file(self, path: str) -> str:
+        export_path = Path(path)
+        export_path.write_text(json.dumps(self.export_data(), indent=2, sort_keys=True))
+        return str(export_path)
+
+    def import_data(self, data: dict[str, Any]) -> None:
+        if hasattr(self.conn, "db"):
+            self.conn.db.clear()
+            self.conn.db.update(json.loads(json.dumps(data)))
+            return
+        raise NotImplementedError("Import is only supported for the in-memory test harness in this environment.")
+
+    def import_from_file(self, path: str) -> None:
+        payload = json.loads(Path(path).read_text())
+        self.import_data(payload)
+
+    def backup_to_file(self, path: str | None = None) -> str:
+        backup_path = Path(path or f"timeontask-backup-{date.today().isoformat()}.json")
+        return self.export_to_file(str(backup_path))
+
+    def set_week_goal(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT IGNORE INTO weekly_goals (week_start, task_id, review_outcome, review_note, carried_to_week_start) VALUES (%s, %s, NULL, NULL, NULL)",
+            (self.week_start(day), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def _normalize_goal_outcome(self, outcome: str) -> str:
+        clean = outcome.strip().lower()
+        if clean not in {"deferred", "blocked", "carried_forward"}:
+            raise ValueError("Goal outcome must be deferred, blocked, or carried_forward.")
+        return clean
+
+    def set_week_goal_outcome(self, goal_id: int, outcome: str, note: str | None = None) -> None:
+        clean_outcome = self._normalize_goal_outcome(outcome)
+        clean_note = note.strip() if note is not None else None
+        if clean_note == "":
+            clean_note = None
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE weekly_goals SET review_outcome = %s, review_note = %s WHERE id = %s",
+            (clean_outcome, clean_note, goal_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def carry_week_goal_forward(self, goal_id: int, day: date | None = None, note: str | None = None) -> None:
+        clean_note = note.strip() if note is not None else None
+        if clean_note == "":
+            clean_note = None
+
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute("SELECT id, week_start, task_id FROM weekly_goals WHERE id = %s", (goal_id,))
+        goal = cur.fetchone()
+        if goal is None:
+            cur.close()
+            raise ValueError("Weekly goal not found.")
+
+        if day is None:
+            current_week = date.fromisoformat(str(goal["week_start"]))
+            target_week = (current_week + timedelta(days=7)).isoformat()
+        else:
+            target_week = self.week_start(day)
+        cur.execute(
+            "INSERT IGNORE INTO weekly_goals (week_start, task_id, review_outcome, review_note, carried_to_week_start) VALUES (%s, %s, NULL, NULL, NULL)",
+            (target_week, goal["task_id"]),
+        )
+        cur.execute(
+            "UPDATE weekly_goals SET review_outcome = %s, review_note = %s, carried_to_week_start = %s WHERE id = %s",
+            ("carried_forward", clean_note, target_week, goal_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def select_today_task(self, task_id: int, day: date | None = None) -> None:
+        today = (day or date.today()).isoformat()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS open_count
+            FROM daily_selection ds
+            JOIN tasks t ON t.id = ds.task_id
+            JOIN projects p ON p.id = t.project_id
+            WHERE ds.day_date = %s AND t.is_completed = 0 AND t.is_archived = 0 AND p.is_archived = 0
+            """,
+            (today,),
+        )
+        open_count = cur.fetchone()["open_count"]
+
+        if open_count >= 2:
+            cur.close()
+            raise ValueError("Cannot add more than two active tasks. Finish selected tasks first.")
+
+        cur.execute(
+            "INSERT IGNORE INTO daily_selection (day_date, task_id) VALUES (%s, %s)",
+            (today, task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def complete_task(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE tasks SET is_completed = 1, completed_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def archive_task(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE tasks SET is_archived = 1, archived_on = %s WHERE id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def restore_task(self, task_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("UPDATE tasks SET is_archived = 0, archived_on = NULL WHERE id = %s", (task_id,))
+        cur.close()
+        self.conn.commit()
+
+    def remove_today_task(self, task_id: int, day: date | None = None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM daily_selection WHERE day_date = %s AND task_id = %s",
+            ((day or date.today()).isoformat(), task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def snooze_task_to_next_week(self, task_id: int, day: date | None = None) -> str:
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError("Task not found.")
+        if bool(task["is_completed"]):
+            raise ValueError("Completed tasks cannot be snoozed.")
+        base_day = day or date.today()
+        next_week_start = date.fromisoformat(self.week_start(base_day)) + timedelta(days=7)
+        due_date_iso = next_week_start.isoformat()
+        self.update_task(
+            task_id,
+            int(task["project_id"]),
+            str(task["title"]),
+            False,
+            due_date=due_date_iso,
+            priority=task["priority"],
+        )
+        self.remove_today_task(task_id, day=base_day)
+        return due_date_iso
+
+    def list_today(self, day: date | None = None) -> list[dict[str, Any]]:
+        today = (day or date.today()).isoformat()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.project_id, t.occurrence_date, p.name AS project_name
+            FROM daily_selection ds
+            JOIN tasks t ON t.id = ds.task_id
+            JOIN projects p ON p.id = t.project_id
+            WHERE ds.day_date = %s AND t.is_archived = 0 AND p.is_archived = 0
+            ORDER BY ds.id
+            """,
+            (today,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def end_of_day(self, day: date | None = None) -> GoalProgress:
+        rows = self.list_today(day)
+        done = sum(1 for r in rows if r["is_completed"])
+        return GoalProgress(total=len(rows), completed=done)
+
+    def week_review(self, day: date | None = None) -> WeekReviewSummary:
+        goals = self.list_week_goals(day)
+        summary = WeekReviewSummary(
+            total=len(goals),
+            completed=0,
+            deferred=0,
+            blocked=0,
+            carried_forward=0,
+            unreviewed=0,
+            completed_tasks=len(self.list_completed_tasks_for_week(day)),
+        )
+        for goal in goals:
+            if goal["is_completed"]:
+                summary.completed += 1
+            elif goal["review_outcome"] == "deferred":
+                summary.deferred += 1
+            elif goal["review_outcome"] == "blocked":
+                summary.blocked += 1
+            elif goal["review_outcome"] == "carried_forward":
+                summary.carried_forward += 1
+            else:
+                summary.unreviewed += 1
+        return summary
+
+    def list_completed_tasks_for_week(self, day: date | None = None) -> list[dict[str, Any]]:
+        start_iso = self.week_start(day)
+        start_day = date.fromisoformat(start_iso)
+        end_iso = (start_day + timedelta(days=6)).isoformat()
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.completed_on, t.occurrence_date, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            WHERE t.is_completed = 1 AND t.completed_on >= %s AND t.completed_on <= %s
+            ORDER BY t.completed_on DESC, t.id DESC
+            """,
+            (start_iso, end_iso),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def list_projects(self, include_archived: bool = False) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        if include_archived:
+            cur.execute("SELECT id, name, is_archived, archived_on FROM projects ORDER BY is_archived, name")
+        else:
+            cur.execute("SELECT id, name, is_archived, archived_on FROM projects WHERE is_archived = 0 ORDER BY name")
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+
+    def list_incomplete_tasks(self, sort_by: str = "created", include_archived: bool = False) -> list[dict[str, Any]]:
+        order_clause = "t.id"
+        if sort_by == "project":
+            order_clause = "p.name, t.title, t.id"
+        cur = self.conn.cursor(dictionary=True)
+        where_clause = "WHERE t.is_completed = 0"
+        if not include_archived:
+            where_clause += " AND t.is_archived = 0 AND p.is_archived = 0"
+        cur.execute(
+            f"""
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_archived, t.occurrence_date, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            {where_clause}
+            ORDER BY {order_clause}
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def list_week_goals(self, day: date | None = None) -> list[dict[str, Any]]:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT wg.id, wg.week_start, wg.review_outcome, wg.review_note, wg.carried_to_week_start,
+                   t.id AS task_id, t.title, t.is_completed, p.name AS project_name
+            FROM weekly_goals wg
+            JOIN tasks t ON t.id = wg.task_id
+            JOIN projects p ON p.id = t.project_id
+            WHERE wg.week_start = %s
+            ORDER BY wg.id
+            """,
+            (self.week_start(day),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def get_task(self, task_id: int) -> dict[str, Any] | None:
+        cur = self.conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, title, project_id, due_date, priority, is_completed, completed_on, is_archived, archived_on, occurrence_date FROM tasks WHERE id = %s",
+            (task_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def update_task(
+        self,
+        task_id: int,
+        project_id: int,
+        title: str,
+        is_completed: bool,
+        due_date: str | None = None,
+        priority: str | int | None = None,
+    ) -> None:
+        due_date_iso = self._normalize_due_date(due_date)
+        priority_val = self._normalize_priority(priority)
+        existing = self.get_task(task_id)
+        completed_on = existing.get("completed_on") if existing else None
+        if is_completed:
+            completed_on = completed_on or date.today().isoformat()
+        else:
+            completed_on = None
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE tasks SET project_id = %s, title = %s, due_date = %s, priority = %s, is_completed = %s, completed_on = %s WHERE id = %s",
+            (project_id, title.strip(), due_date_iso, priority_val, int(is_completed), completed_on, task_id),
+        )
+        cur.close()
+        self.conn.commit()
+
+    def list_tasks(self, sort_by: str = "created", include_archived: bool = False) -> list[dict[str, Any]]:
+        order_clause = "t.id"
+        if sort_by == "project":
+            order_clause = "p.name, t.title, t.id"
+
+        cur = self.conn.cursor(dictionary=True)
+        where_clause = ""
+        if not include_archived:
+            where_clause = "WHERE t.is_archived = 0 AND p.is_archived = 0"
+        cur.execute(
+            f"""
+            SELECT t.id, t.title, t.project_id, t.due_date, t.priority, t.is_completed, t.is_archived, t.archived_on, t.occurrence_date, p.name AS project_name
+            FROM tasks t
+            JOIN projects p ON p.id = t.project_id
+            {where_clause}
+            ORDER BY {order_clause}
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+
+def print_rows(rows: Iterable[dict[str, Any]]) -> None:
+    for row in rows:
+        print(row)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Time on Task CLI (MariaDB/MySQL)")
+    parser.add_argument("--env-file", default=".env")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("add-project")
+    p.add_argument("name")
+
+    t = sub.add_parser("add-task")
+    t.add_argument("project_id", type=int)
+    t.add_argument("title")
+    t.add_argument("--due-date")
+    t.add_argument("--priority", type=int, choices=[1, 2, 3])
+
+    g = sub.add_parser("set-goal")
+    g.add_argument("task_id", type=int)
+
+    s = sub.add_parser("select-today")
+    s.add_argument("task_id", type=int)
+
+    c = sub.add_parser("complete")
+    c.add_argument("task_id", type=int)
+
+    sub.add_parser("today")
+    sub.add_parser("end-of-day")
+    sub.add_parser("week-review")
+    sub.add_parser("projects")
+    sub.add_parser("tasks")
+
+    template = sub.add_parser("add-project-template")
+    template.add_argument("name")
+    template.add_argument("task_titles", nargs="+")
+
+    instantiate = sub.add_parser("create-project-from-template")
+    instantiate.add_argument("template_id", type=int)
+    instantiate.add_argument("project_name")
+    instantiate.add_argument("--starts-on")
+
+    export_cmd = sub.add_parser("export-json")
+    export_cmd.add_argument("path")
+
+    import_cmd = sub.add_parser("import-json")
+    import_cmd.add_argument("path")
+
+    backup_cmd = sub.add_parser("backup-json")
+    backup_cmd.add_argument("--path")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    load_dotenv(args.env_file)
+    app = TimeOnTask()
+
+    try:
+        if args.command == "add-project":
+            app.add_project(args.name)
+            print("Project added")
+        elif args.command == "add-task":
+            app.add_task(args.project_id, args.title, due_date=args.due_date, priority=args.priority)
+            print("Task added")
+        elif args.command == "set-goal":
+            app.set_week_goal(args.task_id)
+            print("Goal set")
+        elif args.command == "select-today":
+            app.select_today_task(args.task_id)
+            print("Task selected")
+        elif args.command == "complete":
+            app.complete_task(args.task_id)
+            print("Task completed")
+        elif args.command == "today":
+            print_rows(app.list_today())
+        elif args.command == "end-of-day":
+            p = app.end_of_day()
+            print(f"Completed today: {p.completed}/{p.total}")
+        elif args.command == "week-review":
+            p = app.week_review()
+            print(f"Week goal progress: {p.completed}/{p.total}")
+        elif args.command == "projects":
+            print_rows(app.list_projects())
+        elif args.command == "tasks":
+            print_rows(app.list_tasks())
+        elif args.command == "add-project-template":
+            template_id = app.add_project_template(
+                args.name,
+                [{"title": title, "due_offset_days": None, "priority": None} for title in args.task_titles],
+            )
+            print(f"Project template created: {template_id}")
+        elif args.command == "create-project-from-template":
+            project_id = app.create_project_from_template(args.template_id, args.project_name, starts_on=args.starts_on)
+            print(f"Project created from template: {project_id}")
+        elif args.command == "export-json":
+            print(app.export_to_file(args.path))
+        elif args.command == "import-json":
+            app.import_from_file(args.path)
+            print("Import complete")
+        elif args.command == "backup-json":
+            print(app.backup_to_file(args.path))
+    finally:
+        app.close()
+
+
+if __name__ == "__main__":
+    main()

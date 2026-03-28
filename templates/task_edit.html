@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Edit Task #{{ task.id }}</h2>
+<form method="post">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <label>
+    Title
+    <input name="title" value="{{ task.title }}" required />
+  </label>
+
+  <label>
+    Due date
+    <input name="due_date" type="date" value="{{ task.due_date or '' }}" />
+  </label>
+
+  <label>
+    Priority
+    <select name="priority">
+      <option value="" {% if not task.priority %}selected{% endif %}>No priority</option>
+      <option value="1" {% if task.priority == 1 %}selected{% endif %}>High (1)</option>
+      <option value="2" {% if task.priority == 2 %}selected{% endif %}>Medium (2)</option>
+      <option value="3" {% if task.priority == 3 %}selected{% endif %}>Low (3)</option>
+    </select>
+  </label>
+
+  <label>
+    Project
+    <select name="project_id" required>
+      {% for project in projects %}
+        <option value="{{ project.id }}" {% if project.id == task.project_id %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    <input type="checkbox" name="is_completed" {% if task.is_completed %}checked{% endif %} />
+    Completed
+  </label>
+
+  <button type="submit">Save</button>
+  <a href="{{ url_for('tasks', sort=sort) }}">Cancel</a>
+</form>
+
+<section>
+  <h3>Task Status</h3>
+  {% if task.is_archived %}
+    <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Restore Task</button>
+    </form>
+  {% else %}
+    <form method="post" action="{{ url_for('archive_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Archive Task</button>
+    </form>
+    <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <input type="hidden" name="project_id" value="{{ task.project_id }}" />
+      <button type="submit">Snooze to Next Week</button>
+    </form>
+  {% endif %}
+</section>
+
+<h3>Subtasks</h3>
+<form method="post" action="{{ url_for('add_subtask', task_id=task.id) }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <label>
+    New subtask
+    <input name="title" placeholder="Add subtask" required />
+  </label>
+  <button type="submit">Add subtask</button>
+</form>
+
+{% if subtasks %}
+<ul>
+  {% for subtask in subtasks %}
+  <li class="subtask-row" draggable="true" data-subtask-id="{{ subtask.id }}">
+    <span class="drag-handle" title="Drag to reorder">↕</span>
+    <form method="post" action="{{ url_for('toggle_subtask', subtask_id=subtask.id) }}" style="display:inline-block; margin-right: 0.5rem;">
+      <input type="hidden" name="task_id" value="{{ task.id }}" />
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <input type="hidden" name="is_completed" value="{{ 0 if subtask.is_completed else 1 }}" />
+      <button type="submit">{% if subtask.is_completed %}Mark open{% else %}Mark done{% endif %}</button>
+    </form>
+    {% if subtask.is_completed %}<s>{{ subtask.title }}</s>{% else %}{{ subtask.title }}{% endif %}
+    <form method="post" action="{{ url_for('delete_subtask', subtask_id=subtask.id) }}" style="display:inline-block; margin-left: 0.5rem;">
+      <input type="hidden" name="task_id" value="{{ task.id }}" />
+      <input type="hidden" name="sort" value="{{ sort }}" />
+      <button type="submit">Delete</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No subtasks yet.</p>
+{% endif %}
+
+<form id="reorder-subtasks-form" method="post" action="{{ url_for('reorder_subtasks', task_id=task.id) }}">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <input type="hidden" id="ordered-ids" name="ordered_ids" value="" />
+  <button type="submit">Save Subtask Order</button>
+</form>
+
+<script>
+  (function () {
+    const list = document.querySelectorAll(".subtask-row");
+    const orderInput = document.getElementById("ordered-ids");
+    let dragged = null;
+    function syncOrder() {
+      const ids = Array.from(document.querySelectorAll(".subtask-row")).map((item) => item.dataset.subtaskId);
+      if (orderInput) orderInput.value = ids.join(",");
+    }
+    list.forEach((item) => {
+      item.addEventListener("dragstart", () => {
+        dragged = item;
+      });
+      item.addEventListener("dragover", (event) => {
+        event.preventDefault();
+      });
+      item.addEventListener("drop", (event) => {
+        event.preventDefault();
+        if (!dragged || dragged === item) return;
+        const parent = item.parentElement;
+        parent.insertBefore(dragged, item);
+        syncOrder();
+      });
+    });
+    syncOrder();
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Week Review ({{ week_start }})</h2>
+
+<div class="grid">
+  <section><h3>Total Goals</h3><p>{{ summary.total }}</p></section>
+  <section><h3>Completed Goals</h3><p>{{ summary.completed }}</p><small>Weekly goals completed.</small></section>
+  <section><h3>Completed Tasks This Week</h3><p>{{ summary.completed_tasks }}</p></section>
+  <section><small>All tasks completed this week.</small></section>
+  <section><h3>Deferred</h3><p>{{ summary.deferred }}</p></section>
+  <section><h3>Blocked</h3><p>{{ summary.blocked }}</p></section>
+  <section><h3>Carried Forward</h3><p>{{ summary.carried_forward }}</p></section>
+  <section><h3>Unreviewed</h3><p>{{ summary.unreviewed }}</p></section>
+</div>
+
+<h3>Completed Tasks This Week</h3>
+<ul class="task-list">
+  {% for task in completed_tasks %}
+    <li class="task-row">
+      <div class="task-row-main">
+        <strong>{{ task.project_name }}</strong> — {{ task.title }}
+        {% if task.priority %}[P{{ task.priority }}]{% endif %}
+        {% if task.due_date %}<span class="task-meta">due {{ task.due_date }}</span>{% endif %}
+        {% if task.was_overdue %}<span class="status-pill status-pill-warning">Completed after due date</span>{% endif %}
+      </div>
+      <div class="task-row-actions">
+        <span class="status-pill status-pill-success">Completed {{ task.completed_on }}</span>
+      </div>
+    </li>
+  {% else %}
+    <li>No tasks were completed this week.</li>
+  {% endfor %}
+</ul>
+
+{% for bucket, label in [
+  ("completed", "Completed Goals"),
+  ("deferred", "Deferred"),
+  ("blocked", "Blocked"),
+  ("carried_forward", "Carried Forward"),
+  ("unreviewed", "Still Open / Unreviewed"),
+] %}
+  <h3>{{ label }}</h3>
+  <ul>
+    {% for goal in grouped_goals[bucket] %}
+      <li>
+        {{ goal.project_name }} — {{ goal.title }}
+        {% if goal.review_note %}
+          <div>Note: {{ goal.review_note }}</div>
+        {% endif %}
+        {% if goal.carried_to_week_start %}
+          <div>Carried to {{ goal.carried_to_week_start }}</div>
+        {% endif %}
+
+        {% if bucket == "unreviewed" %}
+          <form method="post" action="{{ url_for('set_week_goal_outcome', goal_id=goal.id) }}">
+            <input type="hidden" name="outcome" value="deferred" />
+            <input name="note" placeholder="Reason / note (optional)" />
+            <button type="submit">Mark Deferred</button>
+          </form>
+          <form method="post" action="{{ url_for('set_week_goal_outcome', goal_id=goal.id) }}">
+            <input type="hidden" name="outcome" value="blocked" />
+            <input name="note" placeholder="Blocker / note (optional)" />
+            <button type="submit">Mark Blocked</button>
+          </form>
+          <form method="post" action="{{ url_for('carry_week_goal_forward', goal_id=goal.id) }}">
+            <input name="note" placeholder="Carry-forward note (optional)" />
+            <button type="submit">Carry Forward</button>
+          </form>
+        {% endif %}
+      </li>
+    {% else %}
+      <li>No {{ label.lower() }} goals.</li>
+    {% endfor %}
+  </ul>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Edit Recurring Template</h2>
+<form method="post">
+  <input type="hidden" name="sort" value="{{ sort }}" />
+  <label>
+    Title
+    <input name="title" value="{{ template.title }}" required />
+  </label>
+  <label>
+    Project
+    <select name="project_id" required>
+      {% for project in projects %}
+      <option value="{{ project.id }}" {% if template.project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Frequency
+    <select name="freq" required>
+      {% for value in ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] %}
+      <option value="{{ value }}" {% if template.freq == value %}selected{% endif %}>{{ value.title() }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Every N
+    <input name="interval_n" type="number" min="1" step="1" value="{{ template.interval_n }}" required />
+  </label>
+  <label>
+    Starts on
+    <input name="starts_on" type="date" value="{{ template.starts_on }}" />
+  </label>
+  <label>
+    Ends on
+    <input name="ends_on" type="date" value="{{ template.ends_on or '' }}" />
+  </label>
+  <label>
+    Weekdays CSV 0-6
+    <input name="weekdays" value="{{ template.weekdays|join(',') }}" />
+  </label>
+  <label>
+    Month days CSV 1-31
+    <input name="month_days" value="{{ template.month_days|join(',') }}" />
+  </label>
+  <label>
+    Year dates CSV MM-DD
+    <input name="year_dates" value="{{ template.year_dates|join(',') }}" />
+  </label>
+  <label>
+    Due date
+    <input name="due_date" type="date" value="{{ template.due_date or '' }}" />
+  </label>
+  <label>
+    Priority
+    <select name="priority">
+      <option value="" {% if not template.priority %}selected{% endif %}>No priority</option>
+      <option value="1" {% if template.priority == 1 %}selected{% endif %}>High (1)</option>
+      <option value="2" {% if template.priority == 2 %}selected{% endif %}>Medium (2)</option>
+      <option value="3" {% if template.priority == 3 %}selected{% endif %}>Low (3)</option>
+    </select>
+  </label>
+  <button type="submit">Save Template</button>
+  <a href="{{ url_for('tasks', sort=sort) }}">Cancel</a>
+</form>
+{% endblock %}
